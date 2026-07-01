@@ -1,0 +1,307 @@
+#!/usr/bin/env bash
+#
+# ai-bwrap — run AI coding agents inside a bubblewrap sandbox.
+#
+# A multi-agent sandbox wrapper: each agent (claude, opencode, grok, a plain
+# shell, ...) runs inside a `bwrap` namespace with read-write access limited to
+# the current working directory, while the rest of $HOME stays hidden. Only the
+# config/cache/state directories each agent actually needs are passed through.
+#
+# Usage:
+#   ai-bwrap <agent> [options] [-- agent args...]
+#
+# Run `ai-bwrap --help` for details.
+
+set -euo pipefail
+
+PROG="${0##*/}"
+
+# --------------------------------------------------------------------------- #
+# Output helpers
+# --------------------------------------------------------------------------- #
+
+err()  { printf '%s: %s\n' "$PROG" "$*" >&2; }
+die()  { err "$*"; exit 1; }
+
+require_cmd() {
+    # Resolve a command to its absolute path, or fail with a clear message.
+    local cmd="$1" path
+    path="$(command -v "$cmd" 2>/dev/null)" \
+        || die "required command not found on PATH: '$cmd'"
+    printf '%s' "$path"
+}
+
+# --------------------------------------------------------------------------- #
+# Agent registry
+# --------------------------------------------------------------------------- #
+#
+# An agent is just a shell function named `agent_<name>`. When selected it is
+# called with no arguments and must:
+#   * append any extra bind mounts it needs to the AGENT_BINDS array, and
+#   * set EXEC_CMD to the command (and fixed flags) to run inside the sandbox.
+#
+# The common bind mounts (CWD, toolchains, git/gh auth, ...) are always applied,
+# so an agent only declares what is specific to it. To add your own agent,
+# define an `agent_<name>` function in the config file (see CONFIG_FILE below).
+
+# claude — Anthropic's Claude Code CLI.
+agent_claude() {
+    AGENT_BINDS+=(
+        --bind-try    "$HOME/.claude"      "$HOME/.claude"
+        --bind-try    "$HOME/.claude.json" "$HOME/.claude.json"
+        --bind-try    "$HOME/.cache"       "$HOME/.cache"
+        --bind-try    "$HOME/.bun"         "$HOME/.bun"
+        --ro-bind-try "$HOME/.local"       "$HOME/.local"
+    )
+    # The sandbox itself is the safety boundary, so in-app permission prompts
+    # are redundant here. Override by passing your own flags after `--`.
+    EXEC_CMD=("$(require_cmd claude)" --dangerously-skip-permissions)
+}
+
+# opencode — the opencode AI coding agent.
+agent_opencode() {
+    local data="$HOME/.local/share/opencode"
+    local config="$HOME/.config/opencode"
+    local cache="$HOME/.cache/opencode"
+    local state="$HOME/.local/state/opencode"
+    mkdir -p "$data" "$config" "$cache" "$state"
+    AGENT_BINDS+=(
+        --bind "$config" "$config"
+        --bind "$data"   "$data"
+        --bind "$cache"  "$cache"
+        --bind "$state"  "$state"
+    )
+    EXEC_CMD=("$(require_cmd opencode)")
+}
+
+# grok — the Grok CLI. Shares all of ~/.grok (sessions, auth, config, skills).
+agent_grok() {
+    mkdir -p "$HOME/.grok"
+    AGENT_BINDS+=(
+        --bind     "$HOME/.grok"  "$HOME/.grok"
+        --bind-try "$HOME/.cache" "$HOME/.cache"
+        --bind-try "$HOME/.local" "$HOME/.local"
+    )
+    EXEC_CMD=("$(require_cmd grok)")
+}
+
+# bash — a plain shell inside the sandbox, handy for inspecting the environment.
+agent_bash() {
+    AGENT_BINDS+=(
+        --bind-try    "$HOME/.claude"      "$HOME/.claude"
+        --bind-try    "$HOME/.claude.json" "$HOME/.claude.json"
+        --bind-try    "$HOME/.cache"       "$HOME/.cache"
+        --bind-try    "$HOME/.bun"         "$HOME/.bun"
+        --ro-bind-try "$HOME/.local"       "$HOME/.local"
+    )
+    EXEC_CMD=("$(require_cmd bash)")
+}
+
+# Short aliases for the built-in agents.
+resolve_agent_alias() {
+    case "$1" in
+        cc) printf 'claude' ;;
+        oc) printf 'opencode' ;;
+        *)  printf '%s' "$1" ;;
+    esac
+}
+
+list_agents() {
+    # Every `agent_<name>` function currently defined, built-in or user-added.
+    declare -F | sed -n 's/^declare -f agent_//p' | sort
+}
+
+# --------------------------------------------------------------------------- #
+# Usage
+# --------------------------------------------------------------------------- #
+
+usage() {
+    cat <<EOF
+$PROG — run AI coding agents inside a bubblewrap sandbox.
+
+Usage:
+  $PROG <agent> [options] [-- agent args...]
+
+Agents:
+$(list_agents | sed 's/^/  /')
+  (aliases: cc -> claude, oc -> opencode)
+
+Options:
+  --branch [dir]   Copy the current directory to a throwaway branch and run
+                   there instead. Without [dir], a timestamped sibling dir is
+                   created. The agent never touches your original tree.
+  --bind DIR       Extra read-write bind mount (repeatable).
+  --ro-bind DIR    Extra read-only bind mount (repeatable).
+  --no-net         Run with networking disabled.
+  --dry-run        Print the bwrap command that would run, then exit.
+  --list           List available agents and exit.
+  -h, --help       Show this help and exit.
+
+Anything after the agent name that is not a recognised option is passed
+straight through to the agent. Use \`--\` to end option parsing explicitly.
+
+Config:
+  If \$AI_BWRAP_CONFIG (default ~/.config/ai-bwrap/config.sh) exists, it is
+  sourced before agents run. Use it to register custom \`agent_<name>\`
+  functions or to extend EXTRA_BINDS / EXTRA_RO_BINDS.
+EOF
+}
+
+# --------------------------------------------------------------------------- #
+# Optional user config
+# --------------------------------------------------------------------------- #
+
+EXTRA_BINDS=()      # extra read-write binds (from config and/or --bind)
+EXTRA_RO_BINDS=()   # extra read-only binds  (from config and/or --ro-bind)
+
+CONFIG_FILE="${AI_BWRAP_CONFIG:-$HOME/.config/ai-bwrap/config.sh}"
+if [[ -f "$CONFIG_FILE" ]]; then
+    # shellcheck source=/dev/null
+    source "$CONFIG_FILE"
+fi
+
+# --------------------------------------------------------------------------- #
+# Argument parsing
+# --------------------------------------------------------------------------- #
+
+# Handle help/list before requiring an agent.
+case "${1:-}" in
+    -h|--help) usage; exit 0 ;;
+    --list)    list_agents; exit 0 ;;
+    "")        usage >&2; exit 1 ;;
+esac
+
+AGENT_NAME="$(resolve_agent_alias "$1")"
+shift
+
+USE_BRANCH=false
+BRANCH_DIR=""
+SHARE_NET=true
+DRY_RUN=false
+PASS_ARGS=()
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --branch)
+            USE_BRANCH=true
+            if [[ $# -gt 1 && "$2" != --* ]]; then
+                BRANCH_DIR="$2"; shift 2
+            else
+                shift
+            fi
+            ;;
+        --bind)
+            [[ $# -ge 2 ]] || die "--bind requires a directory argument"
+            EXTRA_BINDS+=("$2"); shift 2 ;;
+        --ro-bind)
+            [[ $# -ge 2 ]] || die "--ro-bind requires a directory argument"
+            EXTRA_RO_BINDS+=("$2"); shift 2 ;;
+        --no-net) SHARE_NET=false; shift ;;
+        --dry-run) DRY_RUN=true; shift ;;
+        --list) list_agents; exit 0 ;;
+        -h|--help) usage; exit 0 ;;
+        --) shift; PASS_ARGS+=("$@"); break ;;
+        *) PASS_ARGS+=("$1"); shift ;;
+    esac
+done
+
+# Validate the selected agent up front.
+if ! declare -F "agent_$AGENT_NAME" >/dev/null; then
+    err "unknown agent: '$AGENT_NAME'"
+    err "available agents: $(list_agents | paste -sd' ' -)"
+    exit 1
+fi
+
+require_cmd bwrap >/dev/null
+
+# --------------------------------------------------------------------------- #
+# Working directory (with optional --branch copy)
+# --------------------------------------------------------------------------- #
+
+CWD="$(pwd)"
+
+if [[ "$USE_BRANCH" == true ]]; then
+    if [[ -z "$BRANCH_DIR" ]]; then
+        BRANCH_DIR="$(dirname "$CWD")/$(basename "$CWD")-branch-$(date +%s)"
+    fi
+    [[ "$BRANCH_DIR" == /* ]] || BRANCH_DIR="$(realpath -m "$BRANCH_DIR")"
+    mkdir -p "$BRANCH_DIR"
+    cp -a "$CWD/." "$BRANCH_DIR/"
+    WORK_DIR="$BRANCH_DIR"
+    err "branch created: $WORK_DIR"
+else
+    WORK_DIR="$CWD"
+fi
+
+# --------------------------------------------------------------------------- #
+# Common bwrap arguments
+# --------------------------------------------------------------------------- #
+
+NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+
+BWRAP_ARGS=(
+    --unshare-all
+    --die-with-parent
+    --proc /proc
+    --dev /dev
+    --tmpfs /tmp
+    --tmpfs /run
+    --ro-bind /usr /usr
+    --symlink usr/lib   /lib
+    --symlink usr/lib64 /lib64
+    --symlink usr/bin   /bin
+    --symlink usr/sbin  /sbin
+    --ro-bind /etc /etc
+    --dir "$HOME"
+    --setenv HOME "$HOME"
+    --setenv PATH "$PATH"
+    --setenv TMPDIR /tmp
+    --chdir "$WORK_DIR"
+
+    # Common toolchains and credentials shared by all agents.
+    --ro-bind-try "$NVM_DIR"             "$NVM_DIR"
+    --ro-bind-try "$HOME/.pyenv"         "$HOME/.pyenv"
+    --ro-bind-try "$HOME/.local/bin"     "$HOME/.local/bin"
+    --ro-bind-try "$HOME/.config/gh"     "$HOME/.config/gh"
+    --ro-bind-try "$HOME/.gitconfig"     "$HOME/.gitconfig"
+    --bind-try    "$HOME/.npm"           "$HOME/.npm"
+    --ro-bind-try "$HOME/.npmrc"         "$HOME/.npmrc"
+    --bind-try    "$HOME/.cargo"         "$HOME/.cargo"
+
+    # The working directory is the agent's writable scratch space.
+    --bind "$WORK_DIR" "$WORK_DIR"
+)
+
+[[ "$SHARE_NET" == true ]] && BWRAP_ARGS+=(--share-net)
+
+# Extra binds from config and/or the command line.
+for d in ${EXTRA_BINDS[@]+"${EXTRA_BINDS[@]}"}; do
+    BWRAP_ARGS+=(--bind-try "$d" "$d")
+done
+for d in ${EXTRA_RO_BINDS[@]+"${EXTRA_RO_BINDS[@]}"}; do
+    BWRAP_ARGS+=(--ro-bind-try "$d" "$d")
+done
+
+# --------------------------------------------------------------------------- #
+# Agent-specific setup
+# --------------------------------------------------------------------------- #
+
+AGENT_BINDS=()
+EXEC_CMD=()
+"agent_$AGENT_NAME"
+BWRAP_ARGS+=("${AGENT_BINDS[@]}")
+
+[[ ${#EXEC_CMD[@]} -gt 0 ]] || die "agent '$AGENT_NAME' did not set a command"
+
+# --------------------------------------------------------------------------- #
+# Run
+# --------------------------------------------------------------------------- #
+
+FULL_CMD=(bwrap "${BWRAP_ARGS[@]}" -- "${EXEC_CMD[@]}" ${PASS_ARGS[@]+"${PASS_ARGS[@]}"})
+
+if [[ "$DRY_RUN" == true ]]; then
+    printf '%q ' "${FULL_CMD[@]}"; printf '\n'
+    exit 0
+fi
+
+exec "${FULL_CMD[@]}"

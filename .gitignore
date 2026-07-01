@@ -1,0 +1,26 @@
+# Agent / tooling artifacts
+.ignore
+agents.md
+AGENTS.md
+# dirs and symlinks (e.g. a local agent-references/ link)
+agent-*
+agent-references
+.opencode/
+.claude/
+.grok/
+
+# Local config and scratch
+*.local
+config.sh
+.env
+.env.*
+
+# OS / editor cruft
+.DS_Store
+*.swp
+*~
+
+# Node (only present if docs tooling is added later)
+node_modules/
+docs/.vitepress/dist/
+docs/.vitepress/cache/

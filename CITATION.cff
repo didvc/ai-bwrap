@@ -1,0 +1,28 @@
+cff-version: 1.2.0
+title: ai-bwrap
+message: "If you use this software, please cite it using the metadata from this file."
+type: software
+authors:
+  - alias: didvc
+repository-code: https://github.com/didvc/ai-bwrap
+url: https://github.com/didvc/ai-bwrap
+license: MIT
+version: 0.1.0
+date-released: 2026-06-29
+abstract: >
+  ai-bwrap runs AI coding agents (Claude Code, opencode, Grok, or a plain
+  shell) inside a bubblewrap sandbox. Each agent gets read-write access only
+  to the current working directory while the rest of $HOME stays hidden; only
+  the config, cache, and state directories an agent actually needs are passed
+  through. Agents are declared as small shell functions, so the registry is
+  extensible without modifying the wrapper.
+keywords:
+  - bubblewrap
+  - bwrap
+  - sandbox
+  - isolation
+  - security
+  - ai-agents
+  - coding-agent
+  - cli
+  - linux

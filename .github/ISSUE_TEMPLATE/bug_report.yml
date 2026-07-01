@@ -1,0 +1,39 @@
+name: Bug report
+description: Something doesn't work as expected
+labels: [bug]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: input
+    id: command
+    attributes:
+      label: Command
+      description: The exact ai-bwrap command you ran.
+      placeholder: ai-bwrap claude --no-net
+    validations:
+      required: true
+  - type: textarea
+    id: dry-run
+    attributes:
+      label: Dry-run output
+      description: Output of the same command with `--dry-run` added.
+      render: shell
+  - type: input
+    id: distro
+    attributes:
+      label: Distro / kernel
+      placeholder: Ubuntu 24.04, kernel 6.8
+    validations:
+      required: true
+  - type: input
+    id: bwrap-version
+    attributes:
+      label: bwrap --version
+      placeholder: bubblewrap 0.8.0
+    validations:
+      required: true
