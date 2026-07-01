@@ -41,6 +41,8 @@ DEMO_WS="${TMPDIR:-/tmp}/ai-bwrap-demo/my-project"
 mkdir -p "$DEMO_WS"; : > "$DEMO_WS/main.py"; : > "$DEMO_WS/README.md"
 
 DEMO='echo "# working dir (read-write):"; pwd; ls; echo;'
+# $1/$2 are for the sandbox's inner shell, not for expansion here.
+# shellcheck disable=SC2016
 DEMO+=' chk() { test -e "$1" && echo "  PASS-THROUGH  $2" || echo "  blocked       $2"; };'
 DEMO+=' echo "# host paths, from inside the sandbox:";'
 DEMO+=' chk ~/.ssh "~/.ssh"; chk ~/.aws "~/.aws";'
