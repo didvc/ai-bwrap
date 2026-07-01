@@ -123,3 +123,7 @@ Contributions welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) and the [Code o
 ## License
 
 [MIT](LICENSE)
+
+---
+
+<sub>ai-bwrap is the multi-agent successor to [`opencode-bwrap`](https://github.com/didvc/opencode-bwrap), the original single-tool sandbox wrapper.</sub>
