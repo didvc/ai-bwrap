@@ -127,3 +127,14 @@ Contributions welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) and the [Code o
 ---
 
 <sub>ai-bwrap is the multi-agent successor to [`opencode-bwrap`](https://github.com/didvc/opencode-bwrap), the original single-tool sandbox wrapper.</sub>
+
+<!-- BEGIN gh-mutual-linking -->
+
+---
+
+### Related projects
+
+- [**opencode-bwrap**](https://github.com/didvc/opencode-bwrap) — Run opencode inside a bubblewrap sandbox — confine AI file access to your current working directory
+- [**agent.txtar**](https://github.com/didvc/agent.txtar) — Portable text block for giving structured context to AI agents — embed anywhere, parse anywhere
+- [**claude-code-jsonl-editor**](https://github.com/didvc/claude-code-jsonl-editor) — 🚀 Interactive JSONL editor for Claude Code conversation files with real-time file system synchronization. Efficient prompt engineering through conversation editing.
+<!-- END gh-mutual-linking -->
