@@ -134,8 +134,16 @@ Contributions welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) and the [Code o
 
 ### Related projects
 
-- [**git-dup**](https://github.com/didvc/git-dup) — Snapshot a git subdirectory (committed state + untracked files) into a timestamped sibling directory
 - [**claude-chrome-multi-instance-warn**](https://github.com/didvc/claude-chrome-multi-instance-warn) — Claude Code plugin: warns once per session when a tool payload is about to launch another browser (Chrome/Playwright/Puppeteer/CDP) or fan work…
 - [**claude-email-leak-notice**](https://github.com/didvc/claude-email-leak-notice) — Claude Code plugin: warns once per session when a personal email address appears in a tool payload, so it does not end up in a commit or a pushed…
-- [**didvc**](https://github.com/didvc/didvc) — a little bit about me/vulpes.
+- [**terminal-scheduler**](https://github.com/vsc-ext/terminal-scheduler) — Prompt automation for terminal-based agents, for VSCode.
+- [**oss**](https://github.com/simple-netmon/oss) — Network monitor for Windows, local, privacy-respecting, per-app (ETW-first, no Npcap)
+- [**screen-masking**](https://github.com/didvc/screen-masking) — Cover parts of your Windows desktop with non-interactive overlays you shape from a pixel-ruled preview window. Pure Win32, no dependencies.
+- [**agent.txtar**](https://github.com/didvc/agent.txtar) — Portable text block for giving structured context to AI agents — embed anywhere, parse anywhere
+- [**git-dup**](https://github.com/didvc/git-dup) — Snapshot a git subdirectory (committed state + untracked files) into a timestamped sibling directory
+- [**dir-cpu**](https://github.com/didvc/dir-cpu) — Real-time CLI that shows CPU usage aggregated by filesystem directory
+- [**mva**](https://github.com/didvc/mva) — mva (mv-archive) - rclone backup/archiving simpler, efficient, and graceful. Just mv files to trigger automatic compression and cloud upload.
+- [**cli**](https://github.com/prompt-management/cli) — CLI tool for managing AI prompts with search and organization capabilities. Personal, secure prompt library with YAML storage and metadata filtering.
+- [**cli**](https://github.com/prompt-scheduler/cli) — Modern TypeScript automation tool for scheduling and executing prompts for AI agents with intelligent usage limit detection. Currently supports…
+- [**note-cli**](https://github.com/didvc/note-cli) — Markdown Indexing and Pcre Regular Expression Compatible Full Text Searching for Advanced Note Takers.
 <!-- END gh-mutual-linking -->
