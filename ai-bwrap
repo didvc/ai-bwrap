@@ -132,6 +132,7 @@ Options:
                    created. The agent never touches your original tree.
   --bind DIR       Extra read-write bind mount (repeatable).
   --ro-bind DIR    Extra read-only bind mount (repeatable).
+  --env KEY=VALUE  Extra environment variable (repeatable).
   --no-net         Run with networking disabled.
   --dry-run        Print the bwrap command that would run, then exit.
   --list           List available agents and exit.
@@ -143,7 +144,7 @@ straight through to the agent. Use \`--\` to end option parsing explicitly.
 Config:
   If \$AI_BWRAP_CONFIG (default ~/.config/ai-bwrap/config.sh) exists, it is
   sourced before agents run. Use it to register custom \`agent_<name>\`
-  functions or to extend EXTRA_BINDS / EXTRA_RO_BINDS.
+  functions or to extend EXTRA_BINDS / EXTRA_RO_BINDS / EXTRA_ENV_VARS.
 EOF
 }
 
@@ -153,6 +154,7 @@ EOF
 
 EXTRA_BINDS=()      # extra read-write binds (from config and/or --bind)
 EXTRA_RO_BINDS=()   # extra read-only binds  (from config and/or --ro-bind)
+EXTRA_ENV_VARS=()   # extra KEY=VALUE env vars (from config and/or --env)
 
 CONFIG_FILE="${AI_BWRAP_CONFIG:-$HOME/.config/ai-bwrap/config.sh}"
 if [[ -f "$CONFIG_FILE" ]]; then
@@ -196,6 +198,9 @@ while [[ $# -gt 0 ]]; do
         --ro-bind)
             [[ $# -ge 2 ]] || die "--ro-bind requires a directory argument"
             EXTRA_RO_BINDS+=("$2"); shift 2 ;;
+        --env)
+            [[ $# -ge 2 ]] || die "--env requires a KEY=VALUE argument"
+            EXTRA_ENV_VARS+=("$2"); shift 2 ;;
         --no-net) SHARE_NET=false; shift ;;
         --dry-run) DRY_RUN=true; shift ;;
         --list) list_agents; exit 0 ;;
@@ -274,12 +279,18 @@ BWRAP_ARGS=(
 
 [[ "$SHARE_NET" == true ]] && BWRAP_ARGS+=(--share-net)
 
-# Extra binds from config and/or the command line.
+# Extra args from config and/or the command line.
 for d in ${EXTRA_BINDS[@]+"${EXTRA_BINDS[@]}"}; do
     BWRAP_ARGS+=(--bind-try "$d" "$d")
 done
 for d in ${EXTRA_RO_BINDS[@]+"${EXTRA_RO_BINDS[@]}"}; do
     BWRAP_ARGS+=(--ro-bind-try "$d" "$d")
+done
+for kv in ${EXTRA_ENV_VARS[@]+"${EXTRA_ENV_VARS[@]}"}; do
+    key="${kv%%=*}"
+    value="${kv#*=}"
+    [[ -n "$key" ]] || die "invalid env var: '$kv' (expected KEY=VALUE)"
+    BWRAP_ARGS+=(--setenv "$key" "$value")
 done
 
 # --------------------------------------------------------------------------- #

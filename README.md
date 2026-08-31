@@ -63,6 +63,7 @@ Anything after the agent name that `ai-bwrap` doesn't recognize is passed straig
 | `--branch [dir]` | Copy the current directory to a throwaway branch and run there instead. Without `[dir]`, a timestamped sibling directory is created. Your original tree is never touched. |
 | `--bind DIR` | Extra read-write bind mount (repeatable). |
 | `--ro-bind DIR` | Extra read-only bind mount (repeatable). |
+| `--env KEY=VALUE` | Extra environment variable (repeatable). |
 | `--no-net` | Run with networking disabled. |
 | `--dry-run` | Print the `bwrap` command that would run, then exit. |
 | `--list` | List available agents. |
@@ -98,9 +99,12 @@ agent_aider() {
 
 # Extend the binds shared by all agents:
 EXTRA_RO_BINDS+=( "$HOME/reference-repos" )
+
+# Set extra environment variables shared by all agents:
+EXTRA_ENV_VARS+=( 'FOO=bar' 'API_BASE=https://example.com' )
 ```
 
-The same file can append to `EXTRA_BINDS` (read-write) and `EXTRA_RO_BINDS` (read-only). `ai-bwrap --list` shows custom agents alongside the built-ins.
+The same file can append to `EXTRA_BINDS` (read-write), `EXTRA_RO_BINDS` (read-only), and `EXTRA_ENV_VARS` (`KEY=VALUE` pairs). `ai-bwrap --list` shows custom agents alongside the built-ins.
 
 ## Security notes
 
