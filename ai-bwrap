@@ -70,6 +70,7 @@ agent_opencode() {
         --bind "$data"   "$data"
         --bind "$cache"  "$cache"
         --bind "$state"  "$state"
+        --ro-bind-try "$HOME/.opencode" "$HOME/.opencode"
     )
     EXEC_CMD=("$(require_cmd opencode)")
 }
