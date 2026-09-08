@@ -53,9 +53,7 @@ agent_claude() {
         --bind-try    "$HOME/.bun"         "$HOME/.bun"
         --ro-bind-try "$HOME/.local"       "$HOME/.local"
     )
-    # The sandbox itself is the safety boundary, so in-app permission prompts
-    # are redundant here. Override by passing your own flags after `--`.
-    EXEC_CMD=("$(require_cmd claude)" --dangerously-skip-permissions)
+    EXEC_CMD=("$(require_cmd claude)")
 }
 
 # opencode — the opencode AI coding agent.

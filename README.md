@@ -112,7 +112,7 @@ The same file can append to `EXTRA_BINDS` (read-write), `EXTRA_RO_BINDS` (read-o
 
 - The host kernel is shared; a kernel-level exploit could escape the sandbox.
 - Anything explicitly bind-mounted is reachable by the agent — keep the passthrough list minimal.
-- The `claude` agent runs with `--dangerously-skip-permissions` on the rationale that the sandbox *is* the boundary, so in-app prompts are redundant. Override by passing your own flags after `--`.
+- Agents run with their own default permission behaviour; `ai-bwrap` adds no flags of its own. If you consider the sandbox boundary sufficient and want to skip in-app prompts, pass the agent's own flag, e.g. `ai-bwrap claude -- --dangerously-skip-permissions`.
 
 See [SECURITY.md](SECURITY.md) for the vulnerability reporting process.
 
