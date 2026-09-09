@@ -17,4 +17,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `EXTRA_BINDS` / `EXTRA_RO_BINDS` config hooks for shared passthrough mounts.
 - `scripts/screenshots.sh` to regenerate README images with `freeze`.
 
+### Changed
+
+- The `claude` agent no longer runs with `--dangerously-skip-permissions`; it
+  starts with Claude Code's own default permission mode. Pass the flag yourself
+  if you want the old behaviour: `ai-bwrap claude -- --dangerously-skip-permissions`.
+
 [Unreleased]: https://github.com/didvc/ai-bwrap
