@@ -61,6 +61,7 @@ Anything after the agent name that `ai-bwrap` doesn't recognize is passed straig
 | Option | Description |
 |---|---|
 | `--branch [dir]` | Copy the current directory to a throwaway branch and run there instead. Without `[dir]`, a timestamped sibling directory is created. Your original tree is never touched. |
+| `--git-rw` | Allow writes to git metadata (`.git`): commit, stash, switch branches. By default `.git` is mounted read-only. |
 | `--bind DIR` | Extra read-write bind mount (repeatable). |
 | `--ro-bind DIR` | Extra read-only bind mount (repeatable). |
 | `--env KEY=VALUE` | Extra environment variable (repeatable). |
@@ -82,7 +83,7 @@ Anything after the agent name that `ai-bwrap` doesn't recognize is passed straig
 
 ## What is passed through
 
-Common to every agent (read-only unless noted): `$PWD` **(read-write)**, `~/.gitconfig`, `~/.config/gh`, `$NVM_DIR`, `~/.pyenv`, `~/.local/bin`, `~/.npm` (rw), `~/.cargo` (rw), `/usr`, `/etc`.
+Common to every agent (read-only unless noted): `$PWD` **(read-write)**, `$PWD/.git` **(read-only, unless `--git-rw`)**, `~/.gitconfig`, `~/.config/gh`, `$NVM_DIR`, `~/.pyenv`, `~/.local/bin`, `~/.npm` (rw), `~/.cargo` (rw), `/usr`, `/etc`.
 
 Each agent additionally passes through its own config/cache/state (e.g. `~/.claude`, `~/.config/opencode`, `~/.grok`). See the agent functions in [`ai-bwrap`](ai-bwrap) for the exact list.
 
