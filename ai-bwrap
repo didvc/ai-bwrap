@@ -141,20 +141,35 @@ Anything after the agent name that is not a recognised option is passed
 straight through to the agent. Use \`--\` to end option parsing explicitly.
 
 Config:
-  If \$AI_BWRAP_CONFIG (default ~/.config/ai-bwrap/config.sh) exists, it is
-  sourced before agents run. Use it to register custom \`agent_<name>\`
-  functions or to extend EXTRA_BINDS / EXTRA_RO_BINDS / EXTRA_ENV_VARS.
+  Two layers are sourced before agents run (later wins):
+    1. Global drop-ins: every *.sh in \$AI_BWRAP_GLOBAL_CONFIG_DIR
+       (default /etc/ai-bwrap), in sorted order.
+    2. Per-user: \$AI_BWRAP_CONFIG (default ~/.config/ai-bwrap/config.sh).
+  Use either to register custom \`agent_<name>\` functions or to extend
+  EXTRA_BINDS / EXTRA_RO_BINDS / EXTRA_ENV_VARS.
 EOF
 }
 
 # --------------------------------------------------------------------------- #
-# Optional user config
+# Optional config (global drop-ins, then per-user file)
 # --------------------------------------------------------------------------- #
 
 EXTRA_BINDS=()      # extra read-write binds (from config and/or --bind)
 EXTRA_RO_BINDS=()   # extra read-only binds  (from config and/or --ro-bind)
 EXTRA_ENV_VARS=()   # extra KEY=VALUE env vars (from config and/or --env)
 
+# Global (system-wide) drop-ins: every *.sh in the directory, in sorted order.
+# Sourced first so the per-user file below can override them.
+GLOBAL_CONFIG_DIR="${AI_BWRAP_GLOBAL_CONFIG_DIR:-/etc/ai-bwrap}"
+if [[ -d "$GLOBAL_CONFIG_DIR" ]]; then
+    for f in "$GLOBAL_CONFIG_DIR"/*.sh; do
+        [[ -f "$f" ]] || continue
+        # shellcheck source=/dev/null
+        source "$f"
+    done
+fi
+
+# Per-user config, sourced last (takes precedence over the global drop-ins).
 CONFIG_FILE="${AI_BWRAP_CONFIG:-$HOME/.config/ai-bwrap/config.sh}"
 if [[ -f "$CONFIG_FILE" ]]; then
     # shellcheck source=/dev/null
