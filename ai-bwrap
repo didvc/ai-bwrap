@@ -706,14 +706,28 @@ overlay_summary() {
     [[ $n -gt 0 ]] || return 1
 
     err "changes made in the overlay:"
+    # Deletions (D) and wholesale directory replacements (R) are the entries
+    # that destroy existing work, so they are never hidden behind the cap —
+    # answering y below is only an informed choice if every one of them was
+    # seen. Additions and modifications are what gets truncated instead.
+    local -a destructive=() ordinary=()
     for rel in ${lines[@]+"${lines[@]}"}; do
+        case "$rel" in
+            D* | R*) destructive+=("$rel") ;;
+            *) ordinary+=("$rel") ;;
+        esac
+    done
+    for rel in ${destructive[@]+"${destructive[@]}"}; do
+        printf '    %s\n' "$rel" >&2
+    done
+    for rel in ${ordinary[@]+"${ordinary[@]}"}; do
         if [[ $shown -lt 60 ]]; then
             printf '    %s\n' "$rel" >&2
             shown=$((shown + 1))
         fi
     done
-    [[ ${#lines[@]} -gt $shown ]] &&
-        printf '    ... and %d more\n' "$((${#lines[@]} - shown))" >&2
+    [[ ${#ordinary[@]} -gt $shown ]] &&
+        printf '    ... and %d more\n' "$((${#ordinary[@]} - shown))" >&2
     return 0
 }
 
