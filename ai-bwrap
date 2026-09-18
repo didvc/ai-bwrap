@@ -284,7 +284,13 @@ BWRAP_ARGS=(
 # worktrees and repo subdirectories, whose .git directory lies outside
 # WORK_DIR, and makes .git read-only inside WORK_DIR itself.
 if [[ "$GIT_RW" == false ]] && git -C "$WORK_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    GIT_COMMON_DIR="$(git -C "$WORK_DIR" rev-parse --path-format=absolute --git-common-dir)"
+    # Plain --git-common-dir, not `--path-format=absolute --git-common-dir`:
+    # the latter needs git 2.31+, and older git does not reject the unknown
+    # flag — it echoes it back and exits 0, so the bind source becomes garbage
+    # and bwrap cannot start in any repo at all. Absolutize by hand instead;
+    # --git-common-dir is what resolves worktrees and subdirectories anyway.
+    GIT_COMMON_DIR="$(git -C "$WORK_DIR" rev-parse --git-common-dir)"
+    [[ "$GIT_COMMON_DIR" == /* ]] || GIT_COMMON_DIR="$WORK_DIR/$GIT_COMMON_DIR"
     BWRAP_ARGS+=(--ro-bind "$GIT_COMMON_DIR" "$GIT_COMMON_DIR")
 fi
 
