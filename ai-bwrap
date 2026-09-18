@@ -48,13 +48,16 @@ require_cmd() {
 # so an agent only declares what is specific to it. To add your own agent,
 # define an `agent_<name>` function in the config file (see CONFIG_FILE below).
 #
-# Each one carries `disable=SC2329` ("never invoked"): they are only ever called
-# through the computed name `"agent_$AGENT_NAME"`. ShellCheck does recognise that
-# as an indirect call, but it only draws the conclusion where the script can fall
-# off its end — and this one always exits explicitly, so it warns regardless.
+# Each one carries `disable=SC2329,SC2317`: they are only ever called through the
+# computed name `"agent_$AGENT_NAME"`. ShellCheck does recognise that as an
+# indirect call, but it only draws the conclusion where the script can fall off
+# its end — and this one always exits explicitly, so it warns regardless. Both
+# codes are listed because they are the same complaint from different ShellCheck
+# versions: 0.10+ reports SC2329 ("never invoked"), older ones SC2317
+# ("appears to be unreachable"), and CI may run either.
 
 # claude — Anthropic's Claude Code CLI.
-# shellcheck disable=SC2329
+# shellcheck disable=SC2329,SC2317
 agent_claude() {
     AGENT_BINDS+=(
         --bind-try    "$HOME/.claude"      "$HOME/.claude"
@@ -67,7 +70,7 @@ agent_claude() {
 }
 
 # opencode — the opencode AI coding agent.
-# shellcheck disable=SC2329
+# shellcheck disable=SC2329,SC2317
 agent_opencode() {
     local data="$HOME/.local/share/opencode"
     local config="$HOME/.config/opencode"
@@ -85,7 +88,7 @@ agent_opencode() {
 }
 
 # grok — the Grok CLI. Shares all of ~/.grok (sessions, auth, config, skills).
-# shellcheck disable=SC2329
+# shellcheck disable=SC2329,SC2317
 agent_grok() {
     mkdir -p "$HOME/.grok"
     AGENT_BINDS+=(
@@ -97,7 +100,7 @@ agent_grok() {
 }
 
 # bash — a plain shell inside the sandbox, handy for inspecting the environment.
-# shellcheck disable=SC2329
+# shellcheck disable=SC2329,SC2317
 agent_bash() {
     AGENT_BINDS+=(
         --bind-try    "$HOME/.claude"      "$HOME/.claude"
