@@ -20,14 +20,18 @@ PROG="${0##*/}"
 # Output helpers
 # --------------------------------------------------------------------------- #
 
-err()  { printf '%s: %s\n' "$PROG" "$*" >&2; }
-die()  { err "$*"; exit 1; }
+err() { printf '%s: %s\n' "$PROG" "$*" >&2; }
+ok() { printf '%s: %s\n' "$PROG" "$*" >&2; }
+die() {
+    err "$*"
+    exit 1
+}
 
 require_cmd() {
     # Resolve a command to its absolute path, or fail with a clear message.
     local cmd="$1" path
-    path="$(command -v "$cmd" 2>/dev/null)" \
-        || die "required command not found on PATH: '$cmd'"
+    path="$(command -v "$cmd" 2>/dev/null)" ||
+        die "required command not found on PATH: '$cmd'"
     printf '%s' "$path"
 }
 
@@ -43,8 +47,17 @@ require_cmd() {
 # The common bind mounts (CWD, toolchains, git/gh auth, ...) are always applied,
 # so an agent only declares what is specific to it. To add your own agent,
 # define an `agent_<name>` function in the config file (see CONFIG_FILE below).
+#
+# Each one carries `disable=SC2329,SC2317`: they are only ever called through the
+# computed name `"agent_$AGENT_NAME"`. ShellCheck does recognise that as an
+# indirect call, but it only draws the conclusion where the script can fall off
+# its end — and this one always exits explicitly, so it warns regardless. Both
+# codes are listed because they are the same complaint from different ShellCheck
+# versions: 0.10+ reports SC2329 ("never invoked"), older ones SC2317
+# ("appears to be unreachable"), and CI may run either.
 
 # claude — Anthropic's Claude Code CLI.
+# shellcheck disable=SC2329,SC2317
 agent_claude() {
     AGENT_BINDS+=(
         --bind-try    "$HOME/.claude"      "$HOME/.claude"
@@ -57,6 +70,7 @@ agent_claude() {
 }
 
 # opencode — the opencode AI coding agent.
+# shellcheck disable=SC2329,SC2317
 agent_opencode() {
     local data="$HOME/.local/share/opencode"
     local config="$HOME/.config/opencode"
@@ -74,6 +88,7 @@ agent_opencode() {
 }
 
 # grok — the Grok CLI. Shares all of ~/.grok (sessions, auth, config, skills).
+# shellcheck disable=SC2329,SC2317
 agent_grok() {
     mkdir -p "$HOME/.grok"
     AGENT_BINDS+=(
@@ -85,6 +100,7 @@ agent_grok() {
 }
 
 # bash — a plain shell inside the sandbox, handy for inspecting the environment.
+# shellcheck disable=SC2329,SC2317
 agent_bash() {
     AGENT_BINDS+=(
         --bind-try    "$HOME/.claude"      "$HOME/.claude"
@@ -128,9 +144,31 @@ $(list_agents | sed 's/^/  /')
 Options:
   --branch [dir]   Copy the current directory to a throwaway branch and run
                    there instead. Without [dir], a timestamped sibling dir is
-                   created. The agent never touches your original tree.
+                   created. The agent never touches your original tree, and
+                   you merge back yourself, with whatever tool you like.
   --git-rw         Allow writes to git metadata (.git): commit, stash, switch
-                   branches. By default .git is mounted read-only.
+                   branches. By default .git is mounted read-only. Combines
+                   with --overlay: with --git-rw the .git dir is part of the
+                   overlayed working directory, so commits are reviewed and
+                   written back (or discarded) along with the worktree
+                   changes; without it .git stays a read-only mount on top of
+                   the union.
+  --overlay        Run the agent on a private copy-on-write view of the
+                   working directory (kernel overlayfs). When the agent exits
+                   you see a summary of what changed and are asked whether to
+                   write it back to the real directory; answering no leaves
+                   your tree untouched and discards the changes. Only the
+                   working directory is overlayed — an agent's own
+                   config/cache dirs are bound directly and their changes
+                   always persist. If the question cannot be asked at all (no
+                   terminal, or started in the background) the changeset is
+                   kept in the scratch dir instead.
+
+                   --branch and --overlay are two answers to the same question
+                   and cannot be combined: both keep the agent off your tree,
+                   --branch by copying it up front (cheap to inspect, you do
+                   the merge), --overlay by recording just the changes (no
+                   copy, merged back on one keypress).
   --bind DIR       Extra read-write bind mount (repeatable).
   --ro-bind DIR    Extra read-only bind mount (repeatable).
   --env KEY=VALUE  Extra environment variable (repeatable).
@@ -149,6 +187,12 @@ Config:
     2. Per-user: \$AI_BWRAP_CONFIG (default ~/.config/ai-bwrap/config.sh).
   Use either to register custom \`agent_<name>\` functions or to extend
   EXTRA_BINDS / EXTRA_RO_BINDS / EXTRA_ENV_VARS.
+
+  \$AI_BWRAP_OVERLAY_BASE (default ~/.local/share/ai-bwrap) is where --overlay
+  keeps its scratch layers. It must live on a real filesystem with user xattr
+  support — not on tmpfs, not on another overlay, and not inside the directory
+  you run in. --overlay itself needs bubblewrap 0.11 or newer; every other
+  mode works with older versions.
 EOF
 }
 
@@ -184,9 +228,18 @@ fi
 
 # Handle help/list before requiring an agent.
 case "${1:-}" in
-    -h|--help) usage; exit 0 ;;
-    --list)    list_agents; exit 0 ;;
-    "")        usage >&2; exit 1 ;;
+    -h | --help)
+        usage
+        exit 0
+        ;;
+    --list)
+        list_agents
+        exit 0
+        ;;
+    "")
+        usage >&2
+        exit 1
+        ;;
 esac
 
 AGENT_NAME="$(resolve_agent_alias "$1")"
@@ -195,6 +248,7 @@ shift
 USE_BRANCH=false
 BRANCH_DIR=""
 GIT_RW=false
+USE_OVERLAY=false
 SHARE_NET=true
 DRY_RUN=false
 PASS_ARGS=()
@@ -204,29 +258,66 @@ while [[ $# -gt 0 ]]; do
         --branch)
             USE_BRANCH=true
             if [[ $# -gt 1 && "$2" != --* ]]; then
-                BRANCH_DIR="$2"; shift 2
+                BRANCH_DIR="$2"
+                shift 2
             else
                 shift
             fi
             ;;
+        --overlay)
+            USE_OVERLAY=true
+            shift
+            ;;
         --bind)
             [[ $# -ge 2 ]] || die "--bind requires a directory argument"
-            EXTRA_BINDS+=("$2"); shift 2 ;;
+            EXTRA_BINDS+=("$2")
+            shift 2
+            ;;
         --ro-bind)
             [[ $# -ge 2 ]] || die "--ro-bind requires a directory argument"
-            EXTRA_RO_BINDS+=("$2"); shift 2 ;;
+            EXTRA_RO_BINDS+=("$2")
+            shift 2
+            ;;
         --env)
             [[ $# -ge 2 ]] || die "--env requires a KEY=VALUE argument"
-            EXTRA_ENV_VARS+=("$2"); shift 2 ;;
-        --git-rw) GIT_RW=true; shift ;;
-        --no-net) SHARE_NET=false; shift ;;
-        --dry-run) DRY_RUN=true; shift ;;
-        --list) list_agents; exit 0 ;;
-        -h|--help) usage; exit 0 ;;
-        --) shift; PASS_ARGS+=("$@"); break ;;
-        *) PASS_ARGS+=("$1"); shift ;;
+            EXTRA_ENV_VARS+=("$2")
+            shift 2
+            ;;
+        --git-rw)
+            GIT_RW=true
+            shift
+            ;;
+        --no-net)
+            SHARE_NET=false
+            shift
+            ;;
+        --dry-run)
+            DRY_RUN=true
+            shift
+            ;;
+        --list)
+            list_agents
+            exit 0
+            ;;
+        -h | --help)
+            usage
+            exit 0
+            ;;
+        --)
+            shift
+            PASS_ARGS+=("$@")
+            break
+            ;;
+        *)
+            PASS_ARGS+=("$1")
+            shift
+            ;;
     esac
 done
+
+if [[ "$USE_BRANCH" == true && "$USE_OVERLAY" == true ]]; then
+    die "--branch and --overlay are mutually exclusive (both isolate the agent from the working directory; pick one)"
+fi
 
 # Validate the selected agent up front.
 if ! declare -F "agent_$AGENT_NAME" >/dev/null; then
@@ -236,6 +327,26 @@ if ! declare -F "agent_$AGENT_NAME" >/dev/null; then
 fi
 
 require_cmd bwrap >/dev/null
+
+# Every sandbox mount destination that is set up before the union. If one of
+# them covers $WORK_DIR, the `--overlay` mount on $WORK_DIR would go on top of
+# the wrong tree — and worse the overlay's upperdir would land in the covered
+# space and be lost at exit. Agent-specific mounts are not in this list (they
+# are only added to BWRAP_ARGS later), so they are checked separately.
+OVERLAY_MASK_DIRS=(
+    /proc /dev /tmp /run
+    /usr /etc
+    "${NVM_DIR:-$HOME/.nvm}"
+    "$HOME/.pyenv"
+    "$HOME/.local/bin"
+    "$HOME/.config/gh"
+    "$HOME/.gitconfig"
+    "$HOME/.npm"
+    "$HOME/.npmrc"
+    "$HOME/.cargo"
+)
+for d in ${EXTRA_BINDS[@]+"${EXTRA_BINDS[@]}"}; do OVERLAY_MASK_DIRS+=("$d"); done
+for d in ${EXTRA_RO_BINDS[@]+"${EXTRA_RO_BINDS[@]}"}; do OVERLAY_MASK_DIRS+=("$d"); done
 
 # --------------------------------------------------------------------------- #
 # Working directory (with optional --branch copy)
@@ -254,6 +365,131 @@ if [[ "$USE_BRANCH" == true ]]; then
     err "branch created: $WORK_DIR"
 else
     WORK_DIR="$CWD"
+fi
+
+# --------------------------------------------------------------------------- #
+# Overlay private copy-on-write (--overlay)
+# --------------------------------------------------------------------------- #
+#
+# Instead of binding the working dir straight into the sandbox, the sandbox
+# gets a kernel overlayfs union: the lowerdir is the working dir (never
+# written to), and every edit the agent makes lands in a throwaway upperdir
+# under a scratch dir. After the agent exits the upperdir *is* the changeset,
+# and we replay it onto the real tree only if the user says so.
+#
+# The union is a bwrap-native feature (--overlay-src/--overlay, bubblewrap
+# 0.11+): bwrap opens the upper/work/lower dirs by fd before the sandbox
+# starts and mount()s the union itself inside its own mount namespace. It can
+# therefore run with no extra namespace tricks — nothing besides bwrap itself
+# needs privileges, no unshare, no helper mount. Consequences worth knowing:
+#
+#   * The union is mounted with `userxattr`, so overlayfs uses user.overlay.*
+#     markers instead of trusted.*. That is also what lets us read the opaque
+#     markers back as a normal user. In this mode a renamed directory is
+#     copied up rather than left as a redirect xattr, so the upperdir stays
+#     self-describing: every changed entry is present with its full content.
+#   * bwrap's user namespace maps us to the sandbox root, so the agent runs as
+#     a normal user inside while files created in the upperdir on disk belong
+#     to our real uid, not to root.
+#   * The union is torn down automatically when the sandbox dies, so there is
+#     no lingering mount to clean up, even if we are killed.
+#
+# Layout constraints: upperdir and workdir must live on the same filesystem
+# (guaranteed here — both are made inside $SCRATCH) and that filesystem must
+# support user xattrs. The scratch base must not be masked by something else
+# in the sandbox (e.g. a `--tmpfs /home`), and neither it nor the lower dir
+# may itself be an overlay. All of that is checked below rather than left to
+# a cryptic "mount: wrong fs type" later on.
+
+OVERLAY_SCRATCH_BASE="${AI_BWRAP_OVERLAY_BASE:-$HOME/.local/share/ai-bwrap}"
+
+SCRATCH=""
+OVL_UPPER=""
+OVL_WORK=""
+
+fs_type() { stat -f -c %T -- "$1"; }
+
+if [[ "$USE_OVERLAY" == true ]]; then
+    # The union is built with bwrap's own --overlay/--overlay-src, which arrived
+    # in bubblewrap 0.11. Nothing else in the wrapper needs them, so this is
+    # checked here rather than next to the `require_cmd bwrap` above — an older
+    # bwrap runs every other mode just fine.
+    if [[ ! "$(bwrap --help 2>/dev/null)" == *'--overlay'* ]]; then
+        err "--overlay needs bubblewrap 0.11 or newer (for --overlay/--overlay-src); found: $(bwrap --version 2>/dev/null || echo 'unknown')"
+        die "update bubblewrap, or run without --overlay"
+    fi
+
+    [[ -d "$WORK_DIR" ]] || die "working directory does not exist: $WORK_DIR"
+    case "$(fs_type "$WORK_DIR")" in
+        overlayfs | overlay)
+            die "--overlay: $WORK_DIR is itself on an overlay; overlayfs cannot stack here"
+            ;;
+    esac
+
+    # The scratch tree must not be nested in the tree it shadows, in either
+    # direction. Nothing catches this later: bwrap hands the kernel the layers
+    # as open fds, so overlayfs' own overlapping-layer check never sees the
+    # paths and the union mounts happily. What the agent then gets is its own
+    # upperdir sitting in the middle of the working dir as a directory that
+    # cannot be read at all (ELOOP), and declining the write-back would leave
+    # the changeset inside a tree we just reported as untouched. Compare
+    # resolved paths: $WORK_DIR comes from `pwd` and may be a symlinked route
+    # into the same directory the scratch base names directly.
+    ovl_base_real="$(realpath -m -- "$OVERLAY_SCRATCH_BASE")"
+    work_real="$(realpath -m -- "$WORK_DIR")"
+    if [[ "$ovl_base_real" == "$work_real" ||
+          "$ovl_base_real" == "$work_real"/* ||
+          "$work_real" == "$ovl_base_real"/* ]]; then
+        die "--overlay: the scratch base ($OVERLAY_SCRATCH_BASE) and the working directory ($WORK_DIR) are nested; set AI_BWRAP_OVERLAY_BASE to a path outside the working directory"
+    fi
+
+    mkdir -p "$OVERLAY_SCRATCH_BASE"
+    case "$(fs_type "$OVERLAY_SCRATCH_BASE")" in
+        tmpfs | ramfs | overlayfs | overlay)
+            die "--overlay: scratch base $OVERLAY_SCRATCH_BASE is on $(fs_type "$OVERLAY_SCRATCH_BASE"), which cannot host an overlay upperdir; set AI_BWRAP_OVERLAY_BASE to a dir on a real filesystem"
+            ;;
+    esac
+
+    SCRATCH="$OVERLAY_SCRATCH_BASE/run.$$"
+    [[ -e "$SCRATCH" ]] && die "--overlay: scratch dir already exists: $SCRATCH"
+    OVL_UPPER="$SCRATCH/upper"
+    OVL_WORK="$SCRATCH/work"
+    mkdir -p "$OVL_UPPER" "$OVL_WORK"
+
+    # upperdir and workdir must share a filesystem; they do by construction,
+    # but a symlinked/bind-mounted scratch base could still break that.
+    if [[ "$(stat -c %d -- "$OVL_UPPER")" != "$(stat -c %d -- "$OVL_WORK")" ]]; then
+        rm -rf "$SCRATCH"
+        die "--overlay: upperdir and workdir are on different filesystems"
+    fi
+
+    # The union must be a mount on $WORK_DIR, so whatever mounts are listed
+    # before it in the sandbox must not mask it. The usual culprit is something
+    # covering $HOME (e.g. --tmpfs /home in the config or --bind). Agent binds
+    # are applied later (after --overlay) and cannot mask the union, but they
+    # must not cover the scratch upperdir — checked after the agent function
+    # runs.
+    for mask in ${OVERLAY_MASK_DIRS[@]+"${OVERLAY_MASK_DIRS[@]}"}; do
+        if [[ -n "$mask" && ( "$WORK_DIR" == "$mask" || "$WORK_DIR" == "$mask"/* ) ]]; then
+            rm -rf "$SCRATCH"
+            die "--overlay: $WORK_DIR is masked in the sandbox by a '$mask' mount ahead of it; remove that bind or point AI_BWRAP_OVERLAY_BASE at a path it does not cover"
+        fi
+    done
+
+    # Overlayfs records its opaque/origin markers as user xattrs here; fail
+    # early if the scratch filesystem cannot hold them.
+    if command -v setfattr >/dev/null 2>&1; then
+        : >"$SCRATCH/.xattr-probe"
+        if ! setfattr -n user.ai-bwrap.probe -v 1 "$SCRATCH/.xattr-probe" 2>/dev/null; then
+            rm -rf "$SCRATCH"
+            die "--overlay: $OVERLAY_SCRATCH_BASE does not support user xattrs; set AI_BWRAP_OVERLAY_BASE elsewhere"
+        fi
+        rm -f "$SCRATCH/.xattr-probe"
+    fi
+
+    err "overlay scratch: $SCRATCH"
+else
+    WORK_BIND_SRC="$WORK_DIR"
 fi
 
 # --------------------------------------------------------------------------- #
@@ -290,14 +526,37 @@ BWRAP_ARGS=(
     --bind-try    "$HOME/.npm"           "$HOME/.npm"
     --ro-bind-try "$HOME/.npmrc"         "$HOME/.npmrc"
     --bind-try    "$HOME/.cargo"         "$HOME/.cargo"
-
-    # The working directory is the agent's writable scratch space.
-    --bind "$WORK_DIR" "$WORK_DIR"
 )
+
+# In --overlay mode the working directory is a bwrap-native overlayfs union on
+# top of the real tree (lowerdir), with the agent's edits piling up in the
+# scratch upperdir. The union is torn down when the sandbox dies; afterwards
+# the upperdir is the changeset we review (see the `overlay_apply` code below).
+#
+# This replaces the working directory bind below: the union *is* the writable
+# mount at $WORK_DIR, and it must come after every other bind or they would
+# mask it.
+if [[ "$USE_OVERLAY" == true ]]; then
+    BWRAP_ARGS+=(
+        --overlay-src "$WORK_DIR"
+        --overlay "$OVL_UPPER" "$OVL_WORK" "$WORK_DIR"
+    )
+else
+    # The working directory is the agent's writable scratch space.
+    BWRAP_ARGS+=(--bind "$WORK_BIND_SRC" "$WORK_DIR")
+fi
 
 # Mount git metadata read-only unless --git-rw was given. This covers linked
 # worktrees and repo subdirectories, whose .git directory lies outside
 # WORK_DIR, and makes .git read-only inside WORK_DIR itself.
+#
+# This is deliberately emitted *after* the working directory mount above, so it
+# also applies in --overlay mode: the ro-bind lands on top of the union and
+# keeps .git read-only there too. With --git-rw no bind is added at all, so in
+# overlay mode .git is simply part of the overlayed tree — commits land in the
+# upperdir and are reviewed and written back (or discarded) together with the
+# rest of the changes. The two options are independent; only --branch and
+# --overlay are mutually exclusive.
 if [[ "$GIT_RW" == false ]] && git -C "$WORK_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     # Plain --git-common-dir, not `--path-format=absolute --git-common-dir`:
     # the latter needs git 2.31+, and older git does not reject the unknown
@@ -325,6 +584,15 @@ for kv in ${EXTRA_ENV_VARS[@]+"${EXTRA_ENV_VARS[@]}"}; do
     BWRAP_ARGS+=(--setenv "$key" "$value")
 done
 
+# overlayfs leaves its own bookkeeping dir ($workdir/work) behind with mode
+# 000, which even its owner cannot descend into, so make the scratch tree
+# traversable before removing it.
+overlay_rm_scratch() {
+    [[ -n "${1:-}" && -d "${1:-}" ]] || return 0
+    chmod -R u+rwX -- "$1" 2>/dev/null || true
+    rm -rf -- "$1"
+}
+
 # --------------------------------------------------------------------------- #
 # Agent-specific setup
 # --------------------------------------------------------------------------- #
@@ -336,6 +604,202 @@ BWRAP_ARGS+=("${AGENT_BINDS[@]}")
 
 [[ ${#EXEC_CMD[@]} -gt 0 ]] || die "agent '$AGENT_NAME' did not set a command"
 
+# Agent binds land on top of the union (or would hide it). Two distinct
+# problems, checked per mount entry:
+#   * any bind (ro or rw) whose destination covers $WORK_DIR would mask the
+#     union, so the agent would edit the wrong tree;
+#   * a read-WRITE bind whose destination covers the scratch upperdir would
+#     let the agent corrupt the changeset we read back. A read-ONLY bind over
+#     the upperdir is harmless: the union is mounted before it and the
+#     replay happens on the host, so ro binds (e.g. the common $HOME/.local
+#     one, which contains the default scratch base) are allowed.
+if [[ "$USE_OVERLAY" == true ]]; then
+    i=0
+    nb=${#AGENT_BINDS[@]}
+    while (( i < nb )); do
+        flag="${AGENT_BINDS[i]}"
+        case "$flag" in
+            --bind* | --ro-bind*)
+                dst="${AGENT_BINDS[i+2]}"
+                if [[ "$WORK_DIR" == "$dst" || "$WORK_DIR" == "$dst"/* ]]; then
+                    overlay_rm_scratch "$SCRATCH"
+                    die "--overlay: agent '$AGENT_NAME' binds a dir ('$dst') that covers $WORK_DIR"
+                fi
+                if [[ "$flag" != --ro-bind* && ( "$OVL_UPPER" == "$dst" || "$OVL_UPPER" == "$dst"/* ) ]]; then
+                    overlay_rm_scratch "$SCRATCH"
+                    die "--overlay: agent '$AGENT_NAME' read-write-binds a dir ('$dst') that covers the scratch upperdir $OVL_UPPER"
+                fi
+                i=$((i + 3))
+                continue
+                ;;
+        esac
+        i=$((i + 1))
+    done
+fi
+
+# --------------------------------------------------------------------------- #
+# Reading an overlayfs upperdir as a changeset
+# --------------------------------------------------------------------------- #
+#
+# Once the agent has exited, the upperdir describes exactly what it did. It is
+# not a plain copy of the tree, so it cannot simply be poured over the target:
+#
+#   deleted path      a character device with major:minor 0:0 (a "whiteout")
+#                     sits where the file used to be. Copying it verbatim
+#                     would litter the tree with broken device nodes instead
+#                     of deleting anything, so whiteouts become `rm -rf`.
+#   replaced dir      a directory that was removed and recreated carries the
+#                     `user.overlay.opaque=y` marker: it hides the lower
+#                     directory completely, so the target copy is deleted
+#                     first instead of being merged into.
+#   untouched path    is simply absent from the upperdir. Nothing to do — this
+#                     is why the replay never needs a --delete-style pass over
+#                     files the agent never looked at.
+#   copied-up file    carries bookkeeping xattrs (user.overlay.origin, ...)
+#                     that are meaningless outside the union and get stripped
+#                     after the copy.
+#
+# `find` walks parents before children, so handling each entry in walk order
+# is enough: an opaque directory is cleared before its contents are written.
+
+overlay_is_whiteout() {
+    [[ -c "$1" && ! -L "$1" ]] || return 1
+    [[ "$(stat -c '%t:%T' -- "$1")" == "0:0" ]]
+}
+
+overlay_is_opaque() {
+    local v
+    command -v getfattr >/dev/null 2>&1 || return 1
+    v="$(getfattr --absolute-names --only-values -h -n user.overlay.opaque -- "$1" 2>/dev/null)" || return 1
+    [[ "$v" == "y" ]]
+}
+
+# Print a human-readable summary of the changeset; returns 1 if it is empty.
+overlay_summary() {
+    local upper="$1" target="$2" path rel tgt disp n=0 shown=0
+    local -a lines=()
+    while IFS= read -r -d '' path; do
+        rel="${path#"$upper"/}"
+        tgt="$target/$rel"
+        # A newline in a filename would otherwise look like two entries.
+        disp="$rel"
+        case "$rel" in *[$'\n\r\t']*) disp="$(printf '%q' "$rel")" ;; esac
+        n=$((n + 1))
+        if overlay_is_whiteout "$path"; then
+            lines+=("D  $disp")
+        elif [[ -d "$path" && ! -L "$path" ]]; then
+            if overlay_is_opaque "$path"; then
+                lines+=("R  $disp/") # recreated: lower contents dropped
+            elif [[ ! -d "$tgt" ]]; then
+                lines+=("A  $disp/")
+            elif [[ "$(stat -c %a -- "$path")" != "$(stat -c %a -- "$tgt")" ]]; then
+                lines+=("M  $disp/") # same dir, permissions changed
+            else
+                # Merely merged into an existing dir — usually just the parent
+                # of a real change, so not worth reporting on its own.
+                n=$((n - 1))
+            fi
+        elif [[ -e "$tgt" || -L "$tgt" ]]; then
+            lines+=("M  $disp")
+        else
+            lines+=("A  $disp")
+        fi
+    done < <(find "$upper" -mindepth 1 -print0 2>/dev/null)
+
+    [[ $n -gt 0 ]] || return 1
+
+    err "changes made in the overlay:"
+    # Deletions (D) and wholesale directory replacements (R) are the entries
+    # that destroy existing work, so they are never hidden behind the cap —
+    # answering y below is only an informed choice if every one of them was
+    # seen. Additions and modifications are what gets truncated instead.
+    local -a destructive=() ordinary=()
+    for rel in ${lines[@]+"${lines[@]}"}; do
+        case "$rel" in
+            D* | R*) destructive+=("$rel") ;;
+            *) ordinary+=("$rel") ;;
+        esac
+    done
+    for rel in ${destructive[@]+"${destructive[@]}"}; do
+        printf '    %s\n' "$rel" >&2
+    done
+    for rel in ${ordinary[@]+"${ordinary[@]}"}; do
+        if [[ $shown -lt 60 ]]; then
+            printf '    %s\n' "$rel" >&2
+            shown=$((shown + 1))
+        fi
+    done
+    [[ ${#ordinary[@]} -gt $shown ]] &&
+        printf '    ... and %d more\n' "$((${#ordinary[@]} - shown))" >&2
+    return 0
+}
+
+# Replay the changeset onto the target tree.
+overlay_apply() {
+    local upper="$1" target="$2" path rel tgt
+    while IFS= read -r -d '' path; do
+        rel="${path#"$upper"/}"
+        tgt="$target/$rel"
+        if overlay_is_whiteout "$path"; then
+            rm -rf -- "$tgt" || return 1
+        elif [[ -d "$path" && ! -L "$path" ]]; then
+            # An opaque dir replaces the lower one wholesale; a plain dir is
+            # merged, so only its own metadata is refreshed.
+            if overlay_is_opaque "$path" && { [[ -e "$tgt" ]] || [[ -L "$tgt" ]]; }; then
+                rm -rf -- "$tgt" || return 1
+            fi
+            if [[ ! -d "$tgt" ]]; then
+                rm -rf -- "$tgt" || return 1
+                mkdir -p -- "$tgt" || return 1
+            fi
+            chmod --reference="$path" -- "$tgt" 2>/dev/null || true
+            touch -r "$path" -- "$tgt" 2>/dev/null || true
+        else
+            # Files, symlinks and everything else fully mask the lower entry.
+            [[ -e "$tgt" || -L "$tgt" ]] && { rm -rf -- "$tgt" || return 1; }
+            mkdir -p -- "$(dirname -- "$tgt")" || return 1
+            cp -a -- "$path" "$tgt" || return 1
+        fi
+    done < <(find "$upper" -mindepth 1 -print0 2>/dev/null)
+
+    overlay_strip_xattrs "$target"
+}
+
+# Drop the union's bookkeeping xattrs that `cp -a` dragged along.
+overlay_strip_xattrs() {
+    local target="$1" file="" line name
+    command -v getfattr >/dev/null 2>&1 || return 0
+    command -v setfattr >/dev/null 2>&1 || return 0
+    while IFS= read -r line; do
+        case "$line" in
+            "# file: "*) file="${line#\# file: }" ;;
+            user.overlay.*)
+                name="${line%%=*}"
+                [[ -n "$file" ]] && setfattr -h -x "$name" -- "$file" 2>/dev/null
+                ;;
+        esac
+    done < <(getfattr -R -h -m '^user\.overlay\.' --absolute-names -- "$target" 2>/dev/null)
+    return 0
+}
+
+# --------------------------------------------------------------------------- #
+# Terminal ownership
+# --------------------------------------------------------------------------- #
+
+# True if our process group currently owns the controlling terminal, i.e. we
+# were started in the foreground. Fields of /proc/<pid>/stat after comm are
+# state, ppid, pgrp, session, tty_nr, tpgid — tpgid being the terminal's
+# foreground process group (-1 when there is no controlling terminal). comm
+# can contain spaces and parentheses, so everything up to the last ") " goes.
+terminal_is_ours() {
+    local st rest
+    read -r st <"/proc/$$/stat" 2>/dev/null || return 1
+    rest="${st##*) }"
+    # shellcheck disable=SC2086  # deliberate word splitting into positionals
+    set -- $rest
+    [[ ${6:-} =~ ^[0-9]+$ && "$6" != 0 && "$6" == "$3" ]]
+}
+
 # --------------------------------------------------------------------------- #
 # Run
 # --------------------------------------------------------------------------- #
@@ -343,8 +807,148 @@ BWRAP_ARGS+=("${AGENT_BINDS[@]}")
 FULL_CMD=(bwrap "${BWRAP_ARGS[@]}" -- "${EXEC_CMD[@]}" ${PASS_ARGS[@]+"${PASS_ARGS[@]}"})
 
 if [[ "$DRY_RUN" == true ]]; then
-    printf '%q ' "${FULL_CMD[@]}"; printf '\n'
+    printf '%q ' "${FULL_CMD[@]}"
+    printf '\n'
+    overlay_rm_scratch "$SCRATCH"
     exit 0
 fi
 
-exec "${FULL_CMD[@]}"
+if [[ "$USE_OVERLAY" != true ]]; then
+    exec "${FULL_CMD[@]}"
+fi
+
+# --- overlay mode ---------------------------------------------------------- #
+#
+# The union is created by bwrap itself (bubblewrap 0.11+, --overlay/--overlay-
+# src) and unmounted when the sandbox dies, even if we are killed. The sandbox
+# is run as a job below so we still own the terminal afterwards and can ask
+# whether to write the changes back.
+
+# Unlike the plain path this does not exec, so the wrapper is still around when
+# the agent gets a Ctrl-C from the terminal — and bash would follow a
+# signal-killed child into the grave, skipping the review that is the whole
+# point of --overlay. Installing a handler (rather than `trap ''`, which would
+# be inherited as "ignore" and swallow the agent's own Ctrl-C) keeps us alive.
+INTERRUPTED=false
+trap 'INTERRUPTED=true' INT
+
+# Run the sandbox as a real job (`set -m`) rather than as a plain child, so
+# that we still own the terminal afterwards and can actually ask the question
+# below.
+#
+# The reason we might not: an interactive agent — `bash`, but also anything
+# that drives the terminal itself — claims the terminal for its own process
+# group with tcsetpgrp(), and on exit restores whatever it found there at
+# startup. Inside bwrap's PID namespace our process group is not visible, so
+# the agent has nothing to restore and the terminal is left owned by a process
+# group that dies with the sandbox. We are then a background process: the
+# prompt is printed, but the read that should answer it fails with EIO (or
+# raises SIGTTIN), so the y/N never gets a chance and the changes silently go
+# unapplied.
+#
+# With job control enabled bash puts the child in its own process group, hands
+# it the terminal, and — the part we are after — takes the terminal back for
+# itself once the job is done, no matter what the sandbox did with it in
+# between. SIGINT from the terminal then goes to the job rather than to us, so
+# the INT trap above stays for the no-job-control path and an interrupted
+# agent is recognised by its exit status instead.
+#
+# Only do this when we own the terminal to begin with: bash blocks SIGTTOU
+# around its own tcsetpgrp(), so from a background job it would succeed in
+# stealing the terminal from whatever is in the foreground.
+RC=0
+if terminal_is_ours; then
+    set -m
+    "${FULL_CMD[@]}" || RC=$?
+    set +m
+    [[ $RC -eq $((128 + 2)) ]] && INTERRUPTED=true
+else
+    "${FULL_CMD[@]}" || RC=$?
+fi
+
+trap - INT
+[[ "$INTERRUPTED" == true ]] && err "interrupted"
+err "agent exited rc=$RC"
+
+# The overlay is gone with the sandbox, so its workdir is dead weight. Drop it
+# now: it contains the mode-000 dir that would otherwise make the "rm -rf the
+# scratch yourself" hint below fail for the user.
+chmod -R u+rwX -- "$OVL_WORK" 2>/dev/null || true
+rm -rf -- "$OVL_WORK" 2>/dev/null || true
+
+# $OVL_UPPER is now a plain directory holding the changeset, owned by us.
+if ! overlay_summary "$OVL_UPPER" "$WORK_DIR"; then
+    err "no changes were made"
+    overlay_rm_scratch "$SCRATCH"
+    exit $RC
+fi
+
+# Ask on the controlling terminal, not on stdin: the agent may well have left
+# stdin consumed or redirected. `-r /dev/tty` is not a usable test — the device
+# node exists even when the process has no controlling terminal, so try to open
+# it and fall back to a tty on stdin.
+#
+# The prompt must also survive being started in the background (`ai-bwrap ...
+# &`). In that case we are not in the terminal's foreground process group, so
+# POSIX has the kernel send SIGTTIN to any *read* from the terminal's input
+# queue. With the default SIGTTIN disposition that read would stop the wrapper
+# (state T, "tty input"), leaving the prompt printed but impossible to answer
+# — the job just hangs in the background. Ignoring SIGTTIN around the read
+# fixes it: a signal set to SIG_IGN cannot stop a process, so a background read
+# simply fails fast (EIO), `ANS` stays empty, and we fall through to "changes
+# not applied". In the foreground the read is unaffected and the answer is
+# taken normally. Pure bash — no python/tcgetpgrp dependency — and since both
+# terminal sources end up on the same fd, it covers them with one read.
+#
+# This is only about *genuinely* backgrounded runs. A foreground run that the
+# agent left in the background by rearranging the terminal's process groups is
+# dealt with at the source, by running the sandbox as a job (see `set -m`
+# above); without that, every interactive agent would land here.
+#
+# ANSWERED separates "said no" from "could not be asked". Declining discards
+# the changeset, so the difference matters: a run with no terminal, or one
+# genuinely in the background, must keep it rather than throw the agent's work
+# away on a question nobody ever saw. A failed read (EIO, or EOF from Ctrl-D)
+# counts as not asked for the same reason.
+ANS=""
+ANSWERED=false
+trap '' TTIN 2>/dev/null || true
+if { exec 3</dev/tty; } 2>/dev/null || { [[ -t 0 ]] && exec 3<&0; }; then
+    printf '%s: write these changes back to %s? [y/N] ' "$PROG" "$WORK_DIR" >&2
+    # bash would print its own "read error: Input/output error" for the
+    # background case, which is just noise next to the message below.
+    if IFS= read -r ANS <&3 2>/dev/null; then
+        ANSWERED=true
+    else
+        ANS=""
+        printf '\n' >&2
+    fi
+    exec 3<&-
+else
+    err "no terminal available to ask; keeping the changes unapplied"
+fi
+trap - TTIN 2>/dev/null || true
+
+case "$ANS" in
+    y | Y | yes | Yes | YES)
+        if overlay_apply "$OVL_UPPER" "$WORK_DIR"; then
+            ok "wrote changes back to $WORK_DIR"
+            overlay_rm_scratch "$SCRATCH"
+        else
+            err "writing changes back failed part-way through"
+            err "the changeset is kept at: $OVL_UPPER"
+            exit 1
+        fi
+        ;;
+    *)
+        err "changes not applied; $WORK_DIR is untouched"
+        if [[ "$ANSWERED" == true ]]; then
+            overlay_rm_scratch "$SCRATCH"
+            err "changeset discarded"
+        else
+            err "the changeset is kept at: $OVL_UPPER  (rm -rf $SCRATCH to discard)"
+        fi
+        ;;
+esac
+
+exit $RC
