@@ -24,3 +24,7 @@ config.sh
 node_modules/
 docs/.vitepress/dist/
 docs/.vitepress/cache/
+
+# Scratch directories from tests/run.sh, if a run is interrupted
+.overlay-tests.*
+.overlay-scratch.*
