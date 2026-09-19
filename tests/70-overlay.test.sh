@@ -184,15 +184,20 @@ test_summary_truncates_ordinary_entries_rather_than_flooding() {
 # --------------------------------------------------------------------------- #
 
 test_replacing_a_directory_drops_the_old_contents() {
-    # overlayfs marks a recreated directory opaque instead of merging it. In a
-    # nested user namespace the kernel refuses to set that marker (EIO), so
-    # this is skipped there rather than reported as a failure.
+    # overlayfs marks a recreated directory opaque rather than merging it, and
+    # the replay has to honour that: a file the agent deleted must not come
+    # back. Detecting the marker needs getfattr, whose absence used to be
+    # treated as "not opaque", silently turning this into a merge.
     mkdir -p adir && printf 'old\n' > adir/old.txt
-    if ! overlay_run y 'rm -rf adir && mkdir adir && echo fresh > adir/new.txt'; then
-        :
-    fi
-    if [[ -f adir/old.txt ]]; then
-        skip_test "kernel refused the opaque marker (nested userns); needs a real host"
-    fi
+    overlay_run y 'rm -rf adir && mkdir adir && echo fresh > adir/new.txt'
     [[ -f adir/new.txt ]] || fail "the replacement contents must be applied"
+    [[ ! -e adir/old.txt ]] || fail "a file the agent deleted reappeared after write-back"
+}
+
+test_a_replaced_directory_is_reported_as_such() {
+    # The user approves on the strength of the summary, so a wholesale
+    # replacement must not be shown as a mere addition.
+    mkdir -p adir && printf 'old\n' > adir/old.txt
+    overlay_run n 'rm -rf adir && mkdir adir && echo fresh > adir/new.txt'
+    assert_contains "$output" "R  adir/" "a replaced directory must be reported as R"
 }

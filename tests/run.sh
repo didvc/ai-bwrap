@@ -48,6 +48,8 @@ requires() {
                 FILE_SKIP_REASON="bwrap missing or user namespaces unavailable"
             elif ! have_bwrap_overlay; then
                 FILE_SKIP_REASON="bwrap too old for --overlay (needs 0.11+)"
+            elif ! command -v getfattr >/dev/null 2>&1; then
+                FILE_SKIP_REASON="getfattr missing (install the 'attr' package)"
             fi
             ;;
         *) echo "unknown requires tier: $tier" >&2; exit 1 ;;
