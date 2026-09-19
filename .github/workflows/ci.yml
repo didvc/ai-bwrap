@@ -13,3 +13,62 @@ jobs:
       - uses: actions/checkout@v4
       - name: Run shellcheck
         run: shellcheck ai-bwrap scripts/screenshots.sh
+
+  # Everything that does not need a sandbox: argument construction, the agent
+  # registry, option parsing, config layering. Runs in seconds and covers most
+  # of the CLI surface.
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install bubblewrap
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap
+      - name: Allow unprivileged user namespaces
+        # Ubuntu 24.04 restricts these through AppArmor, which stops bwrap from
+        # starting at all. Harmless where the knob does not exist.
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      - name: Report versions
+        run: |
+          bwrap --version
+          git --version
+          bash --version | head -1
+      - name: Run tests
+        run: ./tests/run.sh
+
+  # The overlay tier needs bubblewrap 0.11+ for --overlay/--overlay-src, which
+  # is newer than the distro package. Built from source here so the write-back
+  # path — the only code that deletes the user's files — is actually exercised
+  # rather than skipped.
+  tests-overlay:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcap-dev meson ninja-build pkg-config
+      - name: Build bubblewrap
+        env:
+          BWRAP_VERSION: "0.11.0"
+        run: |
+          curl -sSLO "https://github.com/containers/bubblewrap/releases/download/v${BWRAP_VERSION}/bubblewrap-${BWRAP_VERSION}.tar.xz"
+          tar xf "bubblewrap-${BWRAP_VERSION}.tar.xz"
+          cd "bubblewrap-${BWRAP_VERSION}"
+          meson setup builddir -Dprefix="$PWD/prefix" -Dman=disabled -Dtests=false
+          ninja -C builddir
+          echo "$PWD/builddir" >> "$GITHUB_PATH"
+      - name: Allow unprivileged user namespaces
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      - name: Confirm overlay support is present
+        # Fail loudly rather than letting the tier silently skip, which would
+        # make this job green while testing nothing.
+        run: |
+          bwrap --version
+          bwrap --help 2>&1 | grep -q -- '--overlay' || {
+            echo "built bwrap has no --overlay; the overlay tier would skip" >&2
+            exit 1
+          }
+      - name: Run tests
+        run: ./tests/run.sh

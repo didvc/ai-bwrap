@@ -564,7 +564,16 @@ if [[ "$GIT_RW" == false ]] && git -C "$WORK_DIR" rev-parse --is-inside-work-tre
     # and bwrap cannot start in any repo at all. Absolutize by hand instead;
     # --git-common-dir is what resolves worktrees and subdirectories anyway.
     GIT_COMMON_DIR="$(git -C "$WORK_DIR" rev-parse --git-common-dir)"
-    [[ "$GIT_COMMON_DIR" == /* ]] || GIT_COMMON_DIR="$WORK_DIR/$GIT_COMMON_DIR"
+    # Older git reports this relative to WORK_DIR, and from a subdirectory it
+    # comes back with .. components ("../../.git"). Resolve to a canonical
+    # absolute path rather than just prefixing WORK_DIR: a bind source
+    # containing .. is resolved by the kernel *after* following any symlinked
+    # component, so it can name a different directory than the repository's
+    # own git dir, and this decides what gets mounted read-only.
+    if [[ "$GIT_COMMON_DIR" != /* ]]; then
+        GIT_COMMON_DIR="$(cd -- "$WORK_DIR" && cd -- "$GIT_COMMON_DIR" && pwd -P)" ||
+            die "cannot resolve the repository's git directory from $WORK_DIR"
+    fi
     BWRAP_ARGS+=(--ro-bind "$GIT_COMMON_DIR" "$GIT_COMMON_DIR")
 fi
 
