@@ -127,6 +127,9 @@ test_branch_and_overlay_cannot_be_combined() {
 # agent did, so the wrapper must refuse up front rather than proceed.
 test_overlay_refuses_without_the_attr_tools() {
     has_flag --overlay || skip_test "this build has no --overlay"
+    # The bubblewrap version check runs before the attr check, so an older
+    # bwrap would fail first and this would be asserting the wrong message.
+    have_bwrap_overlay || skip_test "bwrap too old for --overlay; version check fires first"
     command -v getfattr >/dev/null 2>&1 || skip_test "getfattr already absent; nothing to mask"
     # Mirror the real PATH into a directory that omits only the attr tools, so
     # the wrapper still finds everything else it needs.
