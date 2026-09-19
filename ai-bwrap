@@ -191,8 +191,9 @@ Config:
   \$AI_BWRAP_OVERLAY_BASE (default ~/.local/share/ai-bwrap) is where --overlay
   keeps its scratch layers. It must live on a real filesystem with user xattr
   support — not on tmpfs, not on another overlay, and not inside the directory
-  you run in. --overlay itself needs bubblewrap 0.11 or newer; every other
-  mode works with older versions.
+  you run in. --overlay itself needs bubblewrap 0.11 or newer and the attr
+  tools (getfattr/setfattr), which it uses to read overlayfs' own markers;
+  every other mode works without either.
 EOF
 }
 
@@ -418,6 +419,20 @@ if [[ "$USE_OVERLAY" == true ]]; then
         err "--overlay needs bubblewrap 0.11 or newer (for --overlay/--overlay-src); found: $(bwrap --version 2>/dev/null || echo 'unknown')"
         die "update bubblewrap, or run without --overlay"
     fi
+
+    # The changeset is read back through overlayfs' own xattr markers, so
+    # getfattr is not optional here: without it an opaque directory cannot be
+    # recognised, a directory the agent deleted and recreated is merged into
+    # instead of replaced, and files the agent removed silently reappear in the
+    # tree after the write-back. The summary does not mention them either,
+    # because it reads the same marker. Refuse rather than write back something
+    # that does not match what the agent did.
+    for xattr_tool in getfattr setfattr; do
+        command -v "$xattr_tool" >/dev/null 2>&1 || {
+            err "--overlay needs '$xattr_tool' to read overlayfs markers (Debian/Ubuntu: apt install attr, Fedora: dnf install attr, openSUSE: zypper install attr)"
+            die "install it, or run without --overlay"
+        }
+    done
 
     [[ -d "$WORK_DIR" ]] || die "working directory does not exist: $WORK_DIR"
     case "$(fs_type "$WORK_DIR")" in
@@ -677,8 +692,10 @@ overlay_is_whiteout() {
 }
 
 overlay_is_opaque() {
+    # No `command -v getfattr` guard: treating a missing tool as "not opaque"
+    # is what silently turned directory replacements into merges. Its presence
+    # is required up front, where the failure can still be explained.
     local v
-    command -v getfattr >/dev/null 2>&1 || return 1
     v="$(getfattr --absolute-names --only-values -h -n user.overlay.opaque -- "$1" 2>/dev/null)" || return 1
     [[ "$v" == "y" ]]
 }

@@ -21,7 +21,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   records only the changes and merges them back on one keypress — the two are
   mutually exclusive. Scratch layers live under `$AI_BWRAP_OVERLAY_BASE`
   (default `~/.local/share/ai-bwrap`), which must be on a real filesystem with
-  user xattr support.
+  user xattr support. Requires bubblewrap 0.11+ and the `attr` package
+  (`getfattr`/`setfattr`); the wrapper refuses to start `--overlay` without
+  them rather than write back a changeset it cannot read correctly.
 - `EXTRA_BINDS` / `EXTRA_RO_BINDS` config hooks for shared passthrough mounts.
 - `scripts/screenshots.sh` to regenerate README images with `freeze`.
 
