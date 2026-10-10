@@ -120,6 +120,19 @@ test_tracked_files_stay_editable_with_read_only_git() {
 }
 
 # --------------------------------------------------------------------------- #
+# Devices
+# --------------------------------------------------------------------------- #
+
+test_a_device_passed_with_dev_bind_can_be_opened() {
+    # /dev/null stands in for a real device: bound the plain way it lands on
+    # top of the sandbox's own /dev/null as a nodev mount and writing to it is
+    # refused, so this fails if --dev-bind ever degrades to a normal bind.
+    LAST_CMD='echo x > /dev/null && echo usable'
+    inside --dev-bind /dev/null
+    assert_contains "$output" "usable" "a --dev-bind device must be usable inside"
+}
+
+# --------------------------------------------------------------------------- #
 # Network
 # --------------------------------------------------------------------------- #
 

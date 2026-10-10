@@ -14,6 +14,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `~/.config/ai-bwrap/config.sh` without editing the wrapper.
 - CLI options: `--branch`, `--overlay`, `--git-rw`, `--bind`, `--ro-bind`,
   `--no-net`, `--dry-run`, `--list`, `--help`.
+- `--dev-bind PATH` and the `EXTRA_DEV_BINDS` config hook pass a host device
+  into the sandbox, e.g. a GPU (`/dev/dri`). A device bound with `--bind` is
+  mounted `nodev`: it shows up in the sandbox but cannot be opened.
 - `--overlay` runs the agent on a private copy-on-write view of the working
   directory (kernel overlayfs). On exit you get a summary of what changed and
   are asked whether to write it back; declining leaves your tree untouched.

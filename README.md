@@ -66,6 +66,7 @@ Anything after the agent name that `ai-bwrap` doesn't recognize is passed straig
 | `--overlay` | Run the agent on a private copy-on-write view of the working directory (kernel overlayfs). When the agent exits you see a summary of what changed and are asked whether to write it back to the real directory; answering no leaves your tree untouched and discards the changes. Only the working directory is overlayed — an agent's own config/cache dirs are bound directly and their changes always persist. Git metadata follows `--git-rw`: by default `.git` stays a read-only mount on top of the overlay, with `--git-rw` it is overlayed too, so commits are written back (or discarded) along with the worktree changes. Mutually exclusive with `--branch`. Needs bubblewrap 0.11+ and the `attr` package. |
 | `--bind DIR` | Extra read-write bind mount (repeatable). |
 | `--ro-bind DIR` | Extra read-only bind mount (repeatable). |
+| `--dev-bind PATH` | Extra bind mount that keeps device access, for a device node or directory such as `/dev/dri` (repeatable). A device passed with `--bind` is visible in the sandbox but cannot be opened. |
 | `--env KEY=VALUE` | Extra environment variable (repeatable). |
 | `--no-net` | Run with networking disabled. |
 | `--dry-run` | Print the `bwrap` command that would run, then exit. |
@@ -80,6 +81,7 @@ Anything after the agent name that `ai-bwrap` doesn't recognize is passed straig
 | `~/.ssh`, `~/.aws`, secrets, other projects | Not mounted |
 | `$HOME` (other than passed-through dirs) | Empty virtual dir |
 | Physical block devices (`/dev/sda`, …) | Not present |
+| Other host devices (GPUs, USB, …) | Not present, unless passed with `--dev-bind` |
 | Host processes (other PIDs) | Isolated PID namespace |
 | `sudo` / privilege escalation | Blocked — no setuid in the namespace |
 
@@ -105,9 +107,14 @@ EXTRA_RO_BINDS+=( "$HOME/reference-repos" )
 
 # Set extra environment variables shared by all agents:
 EXTRA_ENV_VARS+=( 'FOO=bar' 'API_BASE=https://example.com' )
+
+# Let agents use the GPU (here: AMD with ROCm). The device nodes need a device
+# bind; the driver also reads /sys, and the toolchain lives in /opt/rocm:
+EXTRA_DEV_BINDS+=( /dev/kfd /dev/dri )
+EXTRA_RO_BINDS+=( /sys /opt/rocm )
 ```
 
-The same file can append to `EXTRA_BINDS` (read-write), `EXTRA_RO_BINDS` (read-only), and `EXTRA_ENV_VARS` (`KEY=VALUE` pairs). `ai-bwrap --list` shows custom agents alongside the built-ins.
+The same file can append to `EXTRA_BINDS` (read-write), `EXTRA_RO_BINDS` (read-only), `EXTRA_DEV_BINDS` (devices), and `EXTRA_ENV_VARS` (`KEY=VALUE` pairs). `ai-bwrap --list` shows custom agents alongside the built-ins.
 
 ## Security notes
 
@@ -115,6 +122,7 @@ The same file can append to `EXTRA_BINDS` (read-write), `EXTRA_RO_BINDS` (read-o
 
 - The host kernel is shared; a kernel-level exploit could escape the sandbox.
 - Anything explicitly bind-mounted is reachable by the agent — keep the passthrough list minimal.
+- A device passed with `--dev-bind` is talked to directly, driver and all: the agent can use it as freely as you can. Pass single devices rather than all of `/dev`.
 - Agents run with their own default permission behaviour; `ai-bwrap` adds no flags of its own. If you consider the sandbox boundary sufficient and want to skip in-app prompts, pass the agent's own flag, e.g. `ai-bwrap claude -- --dangerously-skip-permissions`.
 
 See [SECURITY.md](SECURITY.md) for the vulnerability reporting process.

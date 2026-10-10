@@ -17,7 +17,7 @@ test_help_succeeds_and_describes_the_options() {
     run_ai --help
     assert_status 0 "$status" "--help must exit 0"
     assert_contains "$output" "Options:" "help must list options"
-    for flag in --bind --ro-bind --env --no-net --dry-run --list; do
+    for flag in --bind --ro-bind --dev-bind --env --no-net --dry-run --list; do
         assert_contains "$output" "$flag" "help must document $flag"
     done
 }
@@ -62,6 +62,11 @@ test_ro_bind_without_a_value_is_an_error() {
     [[ "$status" -ne 0 ]] || fail "--ro-bind with no value must fail"
 }
 
+test_dev_bind_without_a_value_is_an_error() {
+    run_ai bash --dev-bind
+    [[ "$status" -ne 0 ]] || fail "--dev-bind with no value must fail"
+}
+
 test_env_without_a_value_is_an_error() {
     run_ai bash --env
     [[ "$status" -ne 0 ]] || fail "--env with no value must fail"
@@ -74,6 +79,14 @@ test_repeated_binds_all_take_effect() {
     for d in a b c; do
         assert_contains "$output" "--bind-try $PWD/$d $PWD/$d" "--bind $d was dropped"
     done
+}
+
+test_dev_bind_is_a_device_bind_not_a_plain_one() {
+    # The whole point of the option: bwrap mounts a plain bind nodev, so a
+    # device passed as --bind-try would be there but could not be opened.
+    dry_run bash --dev-bind /dev/null
+    assert_contains "$output" "--dev-bind-try /dev/null /dev/null" \
+        "--dev-bind must become a device bind"
 }
 
 test_repeated_env_vars_all_take_effect() {

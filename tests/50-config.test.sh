@@ -27,6 +27,14 @@ test_user_config_can_add_binds() {
         "config EXTRA_BINDS must reach the sandbox"
 }
 
+test_user_config_can_add_device_binds() {
+    setup_config
+    printf 'EXTRA_DEV_BINDS+=(/dev/null)\n' > "$AI_BWRAP_CONFIG"
+    dry_run bash
+    assert_contains "$output" "--dev-bind-try /dev/null /dev/null" \
+        "config EXTRA_DEV_BINDS must reach the sandbox"
+}
+
 test_user_config_can_register_an_agent() {
     setup_config
     cat > "$AI_BWRAP_CONFIG" <<'EOF'
