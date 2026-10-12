@@ -17,7 +17,7 @@ test_help_succeeds_and_describes_the_options() {
     run_ai --help
     assert_status 0 "$status" "--help must exit 0"
     assert_contains "$output" "Options:" "help must list options"
-    for flag in --bind --ro-bind --dev-bind --env --no-net --dry-run --list; do
+    for flag in --bind --ro-bind --dev-bind --env --net --net-allow --no-net --dry-run --list; do
         assert_contains "$output" "$flag" "help must document $flag"
     done
 }

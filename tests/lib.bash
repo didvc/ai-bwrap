@@ -135,3 +135,10 @@ have_bwrap_overlay() {
 bwrap_works() {
     have_bwrap && bwrap --ro-bind / / --dev /dev true >/dev/null 2>&1
 }
+
+# pasta needs /dev/net/tun and unprivileged user namespaces; both can be
+# missing (containers, or a test run from inside another sandbox).
+pasta_works() {
+    command -v pasta >/dev/null 2>&1 &&
+        timeout 10 pasta --config-net --quiet -- true >/dev/null 2>&1
+}

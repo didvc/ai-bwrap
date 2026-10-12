@@ -21,10 +21,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install bubblewrap and attr
+      - name: Install bubblewrap, attr, passt and nftables
         # attr provides getfattr/setfattr, which --overlay needs to read
-        # overlayfs markers; without it the overlay tier would skip.
-        run: sudo apt-get update && sudo apt-get install -y bubblewrap attr
+        # overlayfs markers; without it the overlay tier would skip. passt
+        # and nftables are what --net internet runs on; without them the
+        # live network tier would skip.
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap attr passt nftables
       - name: Allow unprivileged user namespaces
         # Ubuntu 24.04 restricts these through AppArmor, which stops bwrap from
         # starting at all. Harmless where the knob does not exist.

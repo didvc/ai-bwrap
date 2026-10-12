@@ -175,7 +175,13 @@ Options:
                    node or directory such as /dev/dri (repeatable). --bind
                    shows a device inside the sandbox, but it cannot be opened.
   --env KEY=VALUE  Extra environment variable (repeatable).
-  --no-net         Run with networking disabled.
+  --net MODE       Network access: host (default; the host's network as is),
+                   internet (public internet only, local networks blocked;
+                   needs pasta and nft, see Network below) or none.
+  --net-allow ADDR With --net internet: let one private destination through
+                   anyway (repeatable). ADDR is IP[/LEN][:PORT], IPv6 with a
+                   port as [IP]:PORT; a port opens both TCP and UDP.
+  --no-net         Same as --net none.
   --dry-run        Print the bwrap command that would run, then exit.
   --list           List available agents and exit.
   -h, --help       Show this help and exit.
@@ -189,7 +195,19 @@ Config:
        (default /etc/ai-bwrap), in sorted order.
     2. Per-user: \$AI_BWRAP_CONFIG (default ~/.config/ai-bwrap/config.sh).
   Use either to register custom \`agent_<name>\` functions or to extend
-  EXTRA_BINDS / EXTRA_RO_BINDS / EXTRA_DEV_BINDS / EXTRA_ENV_VARS.
+  EXTRA_BINDS / EXTRA_RO_BINDS / EXTRA_DEV_BINDS / EXTRA_ENV_VARS, or to set
+  NET_MODE / NET_ALLOW / NET_BLOCK (see Network).
+
+Network:
+  --net internet gives the sandbox its own network namespace, connected to the
+  outside through pasta (user-mode networking, package "passt"), and installs
+  an nftables filter in it before the agent starts. The agent runs without any
+  capabilities, so it cannot change the filter. Blocked: private, link-local,
+  CGNAT, multicast and reserved ranges (NET_BLOCK), plus every subnet the host
+  is directly attached to. Nothing on the host itself is reachable, including
+  its localhost. DNS still works: queries go to a pasta forwarder that relays
+  them to the host's own resolver. Internal hosts the agent does need (a
+  proxy, a package mirror) go into NET_ALLOW or --net-allow.
 
   \$AI_BWRAP_OVERLAY_BASE (default ~/.local/share/ai-bwrap) is where --overlay
   keeps its scratch layers. It must live on a real filesystem with user xattr
@@ -211,11 +229,38 @@ EXTRA_ENV_VARS=()   # extra KEY=VALUE env vars (from config and/or --env)
 
 GIT_RW=false
 USE_OVERLAY=false
-SHARE_NET=true
 USE_BRANCH=false
 BRANCH_DIR=""
 DRY_RUN=false
 PASS_ARGS=()
+SHARE_NET=      # legacy: SHARE_NET=false in a config means NET_MODE=none
+
+# Networking (see "Network" in --help). Config may override all of these.
+NET_MODE=host       # host | internet | none  (--net / --no-net win over this)
+NET_ALLOW=()        # internet mode: destinations let through despite NET_BLOCK
+NET_BLOCK=(         # internet mode: destinations the agent may not reach
+    0.0.0.0/8       # "this network"
+    10.0.0.0/8      # RFC 1918
+    100.64.0.0/10   # CGNAT, also Tailscale
+    169.254.0.0/16  # link-local, incl. cloud metadata services
+    172.16.0.0/12   # RFC 1918
+    192.0.0.0/24    # IETF protocol assignments
+    192.168.0.0/16  # RFC 1918
+    198.18.0.0/15   # benchmarking
+    224.0.0.0/4     # multicast
+    240.0.0.0/4     # reserved, incl. broadcast
+    fc00::/7        # unique local
+    fe80::/10       # link-local
+    ff00::/8        # multicast
+)
+# Also block every subnet the host has a directly attached route to. This is
+# what catches a LAN that uses public addresses, and IPv6 LANs, whose hosts
+# have global addresses that no fixed list can know.
+NET_BLOCK_LOCAL_SUBNETS=true
+# The address the sandbox's resolv.conf points at; pasta answers DNS queries
+# sent there by relaying them to the host's resolver. Empty keeps the host's
+# resolv.conf as is, in which case resolvers on the LAN need a NET_ALLOW.
+NET_DNS_FORWARD=169.254.1.53
 
 # Global (system-wide) drop-ins: every *.sh in the directory, in sorted order.
 # Sourced first so the per-user file below can override them.
@@ -258,6 +303,9 @@ esac
 AGENT_NAME="$(resolve_agent_alias "$1")"
 shift
 
+# Configs written before --net existed turned networking off with SHARE_NET.
+[[ "$SHARE_NET" == false ]] && NET_MODE=none
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --branch)
@@ -297,8 +345,22 @@ while [[ $# -gt 0 ]]; do
             GIT_RW=true
             shift
             ;;
+        --net)
+            [[ $# -ge 2 ]] || die "--net requires a mode: host, internet or none"
+            NET_MODE="$2"
+            shift 2
+            ;;
+        --net=*)
+            NET_MODE="${1#--net=}"
+            shift
+            ;;
+        --net-allow)
+            [[ $# -ge 2 ]] || die "--net-allow requires an address argument"
+            NET_ALLOW+=("$2")
+            shift 2
+            ;;
         --no-net)
-            SHARE_NET=false
+            NET_MODE=none
             shift
             ;;
         --dry-run)
@@ -324,6 +386,11 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+case "$NET_MODE" in
+    host | internet | none) ;;
+    *) die "unknown network mode: '$NET_MODE' (expected host, internet or none)" ;;
+esac
 
 if [[ "$USE_BRANCH" == true && "$USE_OVERLAY" == true ]]; then
     die "--branch and --overlay are mutually exclusive (both isolate the agent from the working directory; pick one)"
@@ -602,7 +669,144 @@ if [[ "$GIT_RW" == false ]] && git -C "$WORK_DIR" rev-parse --is-inside-work-tre
     BWRAP_ARGS+=(--ro-bind "$GIT_COMMON_DIR" "$GIT_COMMON_DIR")
 fi
 
-[[ "$SHARE_NET" == true ]] && BWRAP_ARGS+=(--share-net)
+# --------------------------------------------------------------------------- #
+# Network
+# --------------------------------------------------------------------------- #
+#
+# host      bwrap shares the host's network namespace: the agent sees exactly
+#           what you see, LAN and host services included.
+# none      --unshare-all already gave the sandbox an empty one (loopback only).
+# internet  the sandbox gets a network namespace of its own, wired to the
+#           outside by pasta, with an nftables filter in front of it:
+#
+#   pasta --config-net -- bash -c 'nft -f <rules>; exec bwrap --share-net ...'
+#
+# pasta creates a user + network namespace in which we hold CAP_NET_ADMIN,
+# copies the host's addresses and routes into it, and relays traffic through
+# ordinary sockets on the host, so no privileges are needed anywhere. The
+# filter is installed from inside that namespace and only then is bwrap
+# exec'd. bwrap keeps the namespace (--share-net) but drops into a nested user
+# namespace of its own with every capability gone: capabilities only reach
+# objects owned by the user namespace they belong to, so nothing the agent
+# can do — not even `unshare -r` — lets it touch the filter. --unshare-user is
+# given explicitly rather than relying on --unshare-all's `-try` variant, which
+# would quietly leave the agent in pasta's namespace, as root over the
+# filter, if the nested namespace could not be created.
+#
+# pasta itself is told not to open any other path: no inbound port forwards
+# (-t/-u none), no forwards from the sandbox's loopback to the host's (-T/-U
+# none, which would otherwise expose every service on the host's localhost),
+# and no mapping of the gateway address to the host (--no-map-gw).
+#
+# The filter only sees the destination address, so it is about what the agent
+# can connect to, not what it can resolve: internal names still resolve,
+# connections to them fail. And it filters by address only, so a NET_ALLOW
+# entry opens that host to anything the agent wants to send it.
+
+NET_PREFIX=()
+
+# Turn one NET_ALLOW/NET_BLOCK entry into nft match expressions, one per line:
+# `ip daddr 10.1.2.3`, or with a port `ip daddr 10.1.2.3 tcp dport 3128` and
+# the same for udp. Validated here so that a typo is reported as such rather
+# than as an nft syntax error, and so no entry can smuggle in nft syntax.
+net_matches() {
+    local entry="$1" addr port="" fam
+    if [[ "$entry" =~ ^([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(/[0-9]+)?)(:([0-9]+))?$ ]]; then
+        addr="${BASH_REMATCH[1]}" port="${BASH_REMATCH[4]}" fam=ip
+    elif [[ "$entry" =~ ^\[([0-9A-Fa-f:.]*:[0-9A-Fa-f:.]*(/[0-9]+)?)\]:([0-9]+)$ ]]; then
+        addr="${BASH_REMATCH[1]}" port="${BASH_REMATCH[3]}" fam=ip6
+    elif [[ "$entry" =~ ^\[?([0-9A-Fa-f:.]*:[0-9A-Fa-f:.]*(/[0-9]+)?)\]?$ ]]; then
+        addr="${BASH_REMATCH[1]}" fam=ip6
+    else
+        die "invalid network address: '$entry' (expected IP[/LEN][:PORT], or [IPv6]:PORT)"
+    fi
+    if [[ -n "$port" ]]; then
+        printf '%s daddr %s tcp dport %s\n' "$fam" "$addr" "$port"
+        printf '%s daddr %s udp dport %s\n' "$fam" "$addr" "$port"
+    else
+        printf '%s daddr %s\n' "$fam" "$addr"
+    fi
+}
+
+# Subnets the host is directly attached to, from its kernel-generated routes.
+host_subnets() {
+    command -v ip >/dev/null 2>&1 || return 0
+    { ip -4 route show proto kernel; ip -6 route show proto kernel; } 2>/dev/null |
+        awk '$1 ~ /\// { print $1 }' | sort -u
+}
+
+case "$NET_MODE" in
+    host)
+        BWRAP_ARGS+=(--share-net)
+        ;;
+    none) ;;
+    internet)
+        for net_tool in pasta nft; do
+            command -v "$net_tool" >/dev/null 2>&1 || {
+                err "--net internet needs '$net_tool' (Debian/Ubuntu: apt install passt nftables, Fedora: dnf install passt nftables, Arch: pacman -S passt nftables)"
+                die "install it, or run with --net host / --net none"
+            }
+        done
+
+        net_block=("${NET_BLOCK[@]}")
+        if [[ "$NET_BLOCK_LOCAL_SUBNETS" == true ]]; then
+            mapfile -t -O "${#net_block[@]}" net_block < <(host_subnets)
+        fi
+
+        NFT_RULES='table inet ai_bwrap {
+    chain output {
+        type filter hook output priority filter; policy accept;
+        oifname "lo" accept
+'
+        if [[ -n "$NET_DNS_FORWARD" ]]; then
+            NFT_RULES+="$(net_matches "$NET_DNS_FORWARD:53" | sed 's/^/        /; s/$/ accept/')"$'\n'
+        fi
+        for entry in ${NET_ALLOW[@]+"${NET_ALLOW[@]}"}; do
+            NFT_RULES+="$(net_matches "$entry" | sed 's/^/        /; s/$/ accept/')"$'\n'
+        done
+        for entry in ${net_block[@]+"${net_block[@]}"}; do
+            NFT_RULES+="$(net_matches "$entry" | sed 's/^/        /; s/$/ reject with icmpx admin-prohibited/')"$'\n'
+        done
+        NFT_RULES+='    }
+}'
+
+        # The resolv.conf the agent sees: the host's search domains and
+        # options, but the pasta forwarder as the only nameserver. It reaches
+        # bwrap as fd 9 (--ro-bind-data), opened inside the pasta namespace
+        # below, so there is no temp file to clean up. A symlinked
+        # /etc/resolv.conf (systemd-resolved, NetworkManager) is followed: its
+        # target is where the mount has to go, and bwrap creates it inside the
+        # sandbox's empty /run.
+        RESOLV_DATA=""
+        if [[ -n "$NET_DNS_FORWARD" ]]; then
+            RESOLV_DATA="$(grep -E '^[[:space:]]*(search|domain|options)[[:space:]]' /etc/resolv.conf 2>/dev/null || true)"
+            RESOLV_DATA+=$'\n'"nameserver $NET_DNS_FORWARD"
+            BWRAP_ARGS+=(--ro-bind-data 9 "$(realpath -m /etc/resolv.conf)")
+        fi
+
+        BWRAP_ARGS+=(
+            --share-net
+            --unshare-user --uid "$(id -u)" --gid "$(id -g)"
+            --cap-drop ALL
+        )
+
+        NET_PREFIX=(
+            pasta --config-net --quiet
+            -t none -u none -T none -U none
+            --no-map-gw
+        )
+        [[ -n "$NET_DNS_FORWARD" ]] && NET_PREFIX+=(--dns-forward "$NET_DNS_FORWARD")
+        # shellcheck disable=SC2016  # expanded by the inner shell, not here
+        NET_PREFIX+=(
+            -- "$BASH" -c '
+                nft -f - <<<"$1" || { echo "ai-bwrap: could not install the network filter" >&2; exit 1; }
+                [[ -n "$2" ]] && exec 9<<<"$2"
+                shift 2
+                exec "$@"
+            ' ai-bwrap-net "$NFT_RULES" "$RESOLV_DATA"
+        )
+        ;;
+esac
 
 # Sharing the network namespace is not enough to resolve names. /etc is bound
 # read-only, but on systemd-resolved and NetworkManager systems
@@ -616,7 +820,7 @@ fi
 # resolver implementations: systemd-resolved points into /run/systemd/resolve,
 # NetworkManager into /run/NetworkManager, and a plain file in /etc needs
 # nothing extra because /etc is already bound.
-if [[ "$SHARE_NET" == true && -L /etc/resolv.conf ]]; then
+if [[ "$NET_MODE" == host && -L /etc/resolv.conf ]]; then
     RESOLV_TARGET="$(readlink -f /etc/resolv.conf 2>/dev/null || true)"
     if [[ -n "$RESOLV_TARGET" && "$RESOLV_TARGET" != /etc/* ]]; then
         RESOLV_DIR="${RESOLV_TARGET%/*}"
@@ -866,7 +1070,7 @@ terminal_is_ours() {
 # Run
 # --------------------------------------------------------------------------- #
 
-FULL_CMD=(bwrap "${BWRAP_ARGS[@]}" -- "${EXEC_CMD[@]}" ${PASS_ARGS[@]+"${PASS_ARGS[@]}"})
+FULL_CMD=(${NET_PREFIX[@]+"${NET_PREFIX[@]}"} bwrap "${BWRAP_ARGS[@]}" -- "${EXEC_CMD[@]}" ${PASS_ARGS[@]+"${PASS_ARGS[@]}"})
 
 if [[ "$DRY_RUN" == true ]]; then
     printf '%q ' "${FULL_CMD[@]}"

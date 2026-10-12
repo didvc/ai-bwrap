@@ -52,6 +52,15 @@ requires() {
                 FILE_SKIP_REASON="getfattr missing (install the 'attr' package)"
             fi
             ;;
+        net)
+            if ! bwrap_works; then
+                FILE_SKIP_REASON="bwrap missing or user namespaces unavailable"
+            elif ! command -v nft >/dev/null 2>&1; then
+                FILE_SKIP_REASON="nft missing (install nftables)"
+            elif ! pasta_works; then
+                FILE_SKIP_REASON="pasta missing or unusable (install passt)"
+            fi
+            ;;
         *) echo "unknown requires tier: $tier" >&2; exit 1 ;;
     esac
 }
