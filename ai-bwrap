@@ -171,6 +171,9 @@ Options:
                    copy, merged back on one keypress).
   --bind DIR       Extra read-write bind mount (repeatable).
   --ro-bind DIR    Extra read-only bind mount (repeatable).
+  --dev-bind PATH  Extra bind mount that keeps device access, for a device
+                   node or directory such as /dev/dri (repeatable). --bind
+                   shows a device inside the sandbox, but it cannot be opened.
   --env KEY=VALUE  Extra environment variable (repeatable).
   --no-net         Run with networking disabled.
   --dry-run        Print the bwrap command that would run, then exit.
@@ -186,7 +189,7 @@ Config:
        (default /etc/ai-bwrap), in sorted order.
     2. Per-user: \$AI_BWRAP_CONFIG (default ~/.config/ai-bwrap/config.sh).
   Use either to register custom \`agent_<name>\` functions or to extend
-  EXTRA_BINDS / EXTRA_RO_BINDS / EXTRA_ENV_VARS.
+  EXTRA_BINDS / EXTRA_RO_BINDS / EXTRA_DEV_BINDS / EXTRA_ENV_VARS.
 
   \$AI_BWRAP_OVERLAY_BASE (default ~/.local/share/ai-bwrap) is where --overlay
   keeps its scratch layers. It must live on a real filesystem with user xattr
@@ -203,6 +206,7 @@ EOF
 
 EXTRA_BINDS=()      # extra read-write binds (from config and/or --bind)
 EXTRA_RO_BINDS=()   # extra read-only binds  (from config and/or --ro-bind)
+EXTRA_DEV_BINDS=()  # extra device binds     (from config and/or --dev-bind)
 EXTRA_ENV_VARS=()   # extra KEY=VALUE env vars (from config and/or --env)
 
 GIT_RW=false
@@ -279,6 +283,11 @@ while [[ $# -gt 0 ]]; do
             EXTRA_RO_BINDS+=("$2")
             shift 2
             ;;
+        --dev-bind)
+            [[ $# -ge 2 ]] || die "--dev-bind requires a path argument"
+            EXTRA_DEV_BINDS+=("$2")
+            shift 2
+            ;;
         --env)
             [[ $# -ge 2 ]] || die "--env requires a KEY=VALUE argument"
             EXTRA_ENV_VARS+=("$2")
@@ -348,6 +357,7 @@ OVERLAY_MASK_DIRS=(
 )
 for d in ${EXTRA_BINDS[@]+"${EXTRA_BINDS[@]}"}; do OVERLAY_MASK_DIRS+=("$d"); done
 for d in ${EXTRA_RO_BINDS[@]+"${EXTRA_RO_BINDS[@]}"}; do OVERLAY_MASK_DIRS+=("$d"); done
+for d in ${EXTRA_DEV_BINDS[@]+"${EXTRA_DEV_BINDS[@]}"}; do OVERLAY_MASK_DIRS+=("$d"); done
 
 # --------------------------------------------------------------------------- #
 # Working directory (with optional --branch copy)
@@ -620,6 +630,12 @@ for d in ${EXTRA_BINDS[@]+"${EXTRA_BINDS[@]}"}; do
 done
 for d in ${EXTRA_RO_BINDS[@]+"${EXTRA_RO_BINDS[@]}"}; do
     BWRAP_ARGS+=(--ro-bind-try "$d" "$d")
+done
+# A plain bind is mounted nodev, so a device node bound that way is visible but
+# cannot be opened. These land on top of the `--dev /dev` above, which is what
+# puts a host device back into the sandbox's otherwise minimal /dev.
+for d in ${EXTRA_DEV_BINDS[@]+"${EXTRA_DEV_BINDS[@]}"}; do
+    BWRAP_ARGS+=(--dev-bind-try "$d" "$d")
 done
 for kv in ${EXTRA_ENV_VARS[@]+"${EXTRA_ENV_VARS[@]}"}; do
     key="${kv%%=*}"
