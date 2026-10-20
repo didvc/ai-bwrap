@@ -205,6 +205,14 @@ EXTRA_BINDS=()      # extra read-write binds (from config and/or --bind)
 EXTRA_RO_BINDS=()   # extra read-only binds  (from config and/or --ro-bind)
 EXTRA_ENV_VARS=()   # extra KEY=VALUE env vars (from config and/or --env)
 
+GIT_RW=false
+USE_OVERLAY=false
+SHARE_NET=true
+USE_BRANCH=false
+BRANCH_DIR=""
+DRY_RUN=false
+PASS_ARGS=()
+
 # Global (system-wide) drop-ins: every *.sh in the directory, in sorted order.
 # Sourced first so the per-user file below can override them.
 GLOBAL_CONFIG_DIR="${AI_BWRAP_GLOBAL_CONFIG_DIR:-/etc/ai-bwrap}"
@@ -245,14 +253,6 @@ esac
 
 AGENT_NAME="$(resolve_agent_alias "$1")"
 shift
-
-USE_BRANCH=false
-BRANCH_DIR=""
-GIT_RW=false
-USE_OVERLAY=false
-SHARE_NET=true
-DRY_RUN=false
-PASS_ARGS=()
 
 while [[ $# -gt 0 ]]; do
     case "$1" in

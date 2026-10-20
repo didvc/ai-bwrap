@@ -27,6 +27,36 @@ test_user_config_can_add_binds() {
         "config EXTRA_BINDS must reach the sandbox"
 }
 
+# The flag defaults are assigned before the config layers are sourced, so a
+# config file can set them. Assigning them afterwards silently discarded
+# whatever the config chose, which is easy to reintroduce by moving the block.
+test_user_config_can_set_a_flag_default() {
+    setup_config
+    printf 'GIT_RW=true\n' > "$AI_BWRAP_CONFIG"
+    make_repo
+    dry_run bash
+    assert_not_contains "$output" "--ro-bind $PWD/.git" \
+        "config GIT_RW=true must suppress the read-only git bind"
+}
+
+test_user_config_can_disable_networking() {
+    setup_config
+    printf 'SHARE_NET=false\n' > "$AI_BWRAP_CONFIG"
+    dry_run bash
+    assert_not_contains "$output" "--share-net" \
+        "config SHARE_NET=false must drop network sharing"
+}
+
+test_command_line_still_overrides_the_config() {
+    # Precedence is defaults, then config, then flags. A config that turns
+    # something on must not outrank the flag that turns it off.
+    setup_config
+    printf 'SHARE_NET=true\n' > "$AI_BWRAP_CONFIG"
+    dry_run bash --no-net
+    assert_not_contains "$output" "--share-net" \
+        "--no-net must win over a config that enables networking"
+}
+
 test_user_config_can_register_an_agent() {
     setup_config
     cat > "$AI_BWRAP_CONFIG" <<'EOF'
