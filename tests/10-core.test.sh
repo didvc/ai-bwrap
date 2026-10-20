@@ -113,6 +113,36 @@ test_network_is_shared_by_default() {
     assert_contains "$output" "--share-net" "network on by default"
 }
 
+# Sharing the network namespace does not by itself give the agent a resolver.
+# Where /etc/resolv.conf is a symlink into /run (systemd-resolved,
+# NetworkManager), the sandbox's empty /run tmpfs leaves it dangling, and the
+# symptom reads as "no network" rather than "no DNS".
+resolver_dir() {
+    [[ -L /etc/resolv.conf ]] || return 1
+    local target
+    target="$(readlink -f /etc/resolv.conf 2>/dev/null)" || return 1
+    [[ -n "$target" && "$target" != /etc/* ]] || return 1
+    printf '%s' "${target%/*}"
+}
+
+test_resolver_directory_is_bound_when_networking_is_shared() {
+    local dir
+    dir="$(resolver_dir)" ||
+        skip_test "/etc/resolv.conf does not symlink outside /etc here; /etc already covers it"
+    dry_run bash
+    assert_contains "$output" "--ro-bind-try $dir $dir" \
+        "the directory behind /etc/resolv.conf must be bound"
+}
+
+test_resolver_directory_is_not_bound_without_networking() {
+    local dir
+    dir="$(resolver_dir)" ||
+        skip_test "/etc/resolv.conf does not symlink outside /etc here"
+    dry_run bash --no-net
+    assert_not_contains "$output" "--ro-bind-try $dir $dir" \
+        "--no-net has no resolver to reach, so nothing extra should be bound"
+}
+
 test_no_net_drops_network_sharing() {
     # --unshare-all already removed the network namespace; --share-net is what
     # hands it back, so its absence is what makes --no-net mean anything.

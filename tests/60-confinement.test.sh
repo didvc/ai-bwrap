@@ -136,6 +136,16 @@ test_a_device_passed_with_dev_bind_can_be_opened() {
 # Network
 # --------------------------------------------------------------------------- #
 
+test_resolver_config_is_readable_inside() {
+    # The behavioural half of the resolv.conf fix, and host-shape independent:
+    # a regular file in /etc passes trivially, a symlink into /run only passes
+    # because the directory behind it is bound.
+    [[ -e /etc/resolv.conf ]] || skip_test "this host has no /etc/resolv.conf"
+    in_sandbox 'cat /etc/resolv.conf >/dev/null 2>&1 && echo readable || echo MISSING'
+    assert_contains "$output" "readable" \
+        "the agent must be able to read /etc/resolv.conf when networking is shared"
+}
+
 test_no_net_leaves_only_loopback() {
     # Asserting on the interface list rather than reaching the internet, so the
     # test does not depend on the machine being online.

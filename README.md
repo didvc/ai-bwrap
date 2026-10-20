@@ -1,21 +1,21 @@
 # ai-bwrap
 
-**Run AI coding agents inside a [bubblewrap](https://github.com/containers/bubblewrap) sandbox — one wrapper, any agent.**
+Run AI coding agents inside a [bubblewrap](https://github.com/containers/bubblewrap) sandbox. One wrapper, any agent.
 
 [![CI](https://github.com/didvc/ai-bwrap/actions/workflows/ci.yml/badge.svg)](https://github.com/didvc/ai-bwrap/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Shell](https://img.shields.io/badge/shell-bash-1f425f.svg)](ai-bwrap)
 [![Platform: Linux](https://img.shields.io/badge/platform-linux-blue.svg)](#requirements)
 
-`ai-bwrap` launches an AI coding agent — **Claude Code**, **opencode**, **Grok**, or a plain **shell** — inside a `bwrap` namespace. The agent gets read-write access **only to your current working directory**; the rest of `$HOME` stays hidden. Just the config, cache, and state directories an agent actually needs are passed through.
+`ai-bwrap` launches an AI coding agent (Claude Code, opencode, Grok, or a plain shell) inside a `bwrap` namespace. The agent gets read-write access only to your current working directory; the rest of `$HOME` stays hidden. Just the config, cache, and state directories an agent actually needs are passed through.
 
-It is the multi-agent sequel to [`opencode-bwrap`](https://github.com/didvc/opencode-bwrap): instead of wrapping a single tool, agents are declared as small shell functions, so the registry is **extensible without touching the wrapper**.
+Agents are declared as small shell functions, so the registry is extensible without touching the wrapper.
 
 ![ai-bwrap --help](assets/screenshots/help.png)
 
 ## Why
 
-AI coding agents run shell commands, edit files, and fetch from the network on your behalf. Run directly, they can read anything you can — `~/.ssh`, `~/.aws`, browser profiles, every other project on disk. `ai-bwrap` confines them to the directory you're actually working in, while still passing through the toolchains and credentials they legitimately need (git, `gh`, Node/NVM, Cargo, …).
+AI coding agents run shell commands, edit files, and fetch from the network on your behalf. Run directly, they can read anything you can: `~/.ssh`, `~/.aws`, browser profiles, every other project on disk. `ai-bwrap` confines them to the directory you're actually working in, while still passing through the toolchains and credentials they legitimately need (git, `gh`, Node/NVM, Cargo, …).
 
 ![What the sandbox blocks vs. passes through](assets/screenshots/isolation.png)
 
@@ -63,7 +63,7 @@ Anything after the agent name that `ai-bwrap` doesn't recognize is passed straig
 |---|---|
 | `--branch [dir]` | Copy the current directory to a throwaway branch and run there instead. Without `[dir]`, a timestamped sibling directory is created. Your original tree is never touched. |
 | `--git-rw` | Allow writes to git metadata (`.git`): commit, stash, switch branches. By default `.git` is mounted read-only. Combines with `--overlay`, see below. |
-| `--overlay` | Run the agent on a private copy-on-write view of the working directory (kernel overlayfs). When the agent exits you see a summary of what changed and are asked whether to write it back to the real directory; answering no leaves your tree untouched and discards the changes. Only the working directory is overlayed — an agent's own config/cache dirs are bound directly and their changes always persist. Git metadata follows `--git-rw`: by default `.git` stays a read-only mount on top of the overlay, with `--git-rw` it is overlayed too, so commits are written back (or discarded) along with the worktree changes. Mutually exclusive with `--branch`. Needs bubblewrap 0.11+ and the `attr` package. |
+| `--overlay` | Run the agent on a private copy-on-write view of the working directory (kernel overlayfs). When the agent exits you see a summary of what changed and are asked whether to write it back to the real directory; answering no leaves your tree untouched and discards the changes. Only the working directory is overlayed, an agent's own config/cache dirs are bound directly and their changes always persist. Git metadata follows `--git-rw`: by default `.git` stays a read-only mount on top of the overlay, with `--git-rw` it is overlayed too, so commits are written back (or discarded) along with the worktree changes. Mutually exclusive with `--branch`. Needs bubblewrap 0.11+ and the `attr` package. |
 | `--bind DIR` | Extra read-write bind mount (repeatable). |
 | `--ro-bind DIR` | Extra read-only bind mount (repeatable). |
 | `--dev-bind PATH` | Extra bind mount that keeps device access, for a device node or directory such as `/dev/dri` (repeatable). A device passed with `--bind` is visible in the sandbox but cannot be opened. |
@@ -82,18 +82,19 @@ Anything after the agent name that `ai-bwrap` doesn't recognize is passed straig
 | `$HOME` (other than passed-through dirs) | Empty virtual dir |
 | Physical block devices (`/dev/sda`, …) | Not present |
 | Other host devices (GPUs, USB, …) | Not present, unless passed with `--dev-bind` |
+| DNS / `/etc/resolv.conf` | Readable; where it symlinks into `/run`, that directory is bound read-only when networking is shared |
 | Host processes (other PIDs) | Isolated PID namespace |
-| `sudo` / privilege escalation | Blocked — no setuid in the namespace |
+| `sudo` / privilege escalation | Blocked, no setuid in the namespace |
 
 ## What is passed through
 
-Common to every agent (read-only unless noted): `$PWD` **(read-write)**, `$PWD/.git` **(read-only, unless `--git-rw`)**, `~/.gitconfig`, `~/.config/gh`, `$NVM_DIR`, `~/.pyenv`, `~/.local/bin`, `~/.npm` (rw), `~/.cargo` (rw), `/usr`, `/etc`.
+Common to every agent (read-only unless noted): `$PWD` (read-write), `$PWD/.git` (read-only, unless `--git-rw`), `~/.gitconfig`, `~/.config/gh`, `$NVM_DIR`, `~/.pyenv`, `~/.local/bin`, `~/.npm` (rw), `~/.cargo` (rw), `/usr`, `/etc`.
 
 Each agent additionally passes through its own config/cache/state (e.g. `~/.claude`, `~/.config/opencode`, `~/.grok`). See the agent functions in [`ai-bwrap`](ai-bwrap) for the exact list.
 
 ## Custom agents
 
-An agent is just a function named `agent_<name>` that declares its binds and the command to run. Define your own in `~/.config/ai-bwrap/config.sh` (override with `$AI_BWRAP_CONFIG`) — no need to edit the wrapper:
+An agent is just a function named `agent_<name>` that declares its binds and the command to run. Define your own in `~/.config/ai-bwrap/config.sh` (override with `$AI_BWRAP_CONFIG`), no need to edit the wrapper:
 
 ```sh
 # ~/.config/ai-bwrap/config.sh
@@ -118,10 +119,10 @@ The same file can append to `EXTRA_BINDS` (read-write), `EXTRA_RO_BINDS` (read-o
 
 ## Security notes
 
-`bwrap` uses Linux namespaces — the host kernel is shared. This is stronger isolation than running an agent directly, and lighter than a VM. For everyday development it's a practical tradeoff, but be aware:
+`bwrap` uses Linux namespaces, the host kernel is shared. This is stronger isolation than running an agent directly, and lighter than a VM. For everyday development it's a practical tradeoff, but be aware:
 
 - The host kernel is shared; a kernel-level exploit could escape the sandbox.
-- Anything explicitly bind-mounted is reachable by the agent — keep the passthrough list minimal.
+- Anything explicitly bind-mounted is reachable by the agent, so keep the passthrough list minimal.
 - A device passed with `--dev-bind` is talked to directly, driver and all: the agent can use it as freely as you can. Pass single devices rather than all of `/dev`.
 - Agents run with their own default permission behaviour; `ai-bwrap` adds no flags of its own. If you consider the sandbox boundary sufficient and want to skip in-app prompts, pass the agent's own flag, e.g. `ai-bwrap claude -- --dangerously-skip-permissions`.
 
@@ -133,15 +134,12 @@ Builds on [`opencode-bwrap`](https://github.com/didvc/opencode-bwrap) and the [b
 
 ## Contributing
 
-Contributions welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md).
+Contributions welcome, see [CONTRIBUTING.md](CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## License
 
 [MIT](LICENSE)
 
----
-
-<sub>ai-bwrap is the multi-agent successor to [`opencode-bwrap`](https://github.com/didvc/opencode-bwrap), the original single-tool sandbox wrapper.</sub>
 
 <!-- BEGIN gh-mutual-linking -->
 
@@ -149,16 +147,7 @@ Contributions welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) and the [Code o
 
 ### Related projects
 
-- [**claude-chrome-multi-instance-warn**](https://github.com/didvc/claude-chrome-multi-instance-warn) — Claude Code plugin: warns once per session when a tool payload is about to launch another browser (Chrome/Playwright/Puppeteer/CDP) or fan work…
-- [**claude-email-leak-notice**](https://github.com/didvc/claude-email-leak-notice) — Claude Code plugin: warns once per session when a personal email address appears in a tool payload, so it does not end up in a commit or a pushed…
-- [**terminal-scheduler**](https://github.com/vsc-ext/terminal-scheduler) — Prompt automation for terminal-based agents, for VSCode.
-- [**oss**](https://github.com/simple-netmon/oss) — Network monitor for Windows, local, privacy-respecting, per-app (ETW-first, no Npcap)
-- [**screen-masking**](https://github.com/didvc/screen-masking) — Cover parts of your Windows desktop with non-interactive overlays you shape from a pixel-ruled preview window. Pure Win32, no dependencies.
-- [**agent.txtar**](https://github.com/didvc/agent.txtar) — Portable text block for giving structured context to AI agents — embed anywhere, parse anywhere
-- [**git-dup**](https://github.com/didvc/git-dup) — Snapshot a git subdirectory (committed state + untracked files) into a timestamped sibling directory
-- [**dir-cpu**](https://github.com/didvc/dir-cpu) — Real-time CLI that shows CPU usage aggregated by filesystem directory
-- [**mva**](https://github.com/didvc/mva) — mva (mv-archive) - rclone backup/archiving simpler, efficient, and graceful. Just mv files to trigger automatic compression and cloud upload.
-- [**cli**](https://github.com/prompt-management/cli) — CLI tool for managing AI prompts with search and organization capabilities. Personal, secure prompt library with YAML storage and metadata filtering.
-- [**cli**](https://github.com/prompt-scheduler/cli) — Modern TypeScript automation tool for scheduling and executing prompts for AI agents with intelligent usage limit detection. Currently supports…
-- [**note-cli**](https://github.com/didvc/note-cli) — Markdown Indexing and Pcre Regular Expression Compatible Full Text Searching for Advanced Note Takers.
+- [claude-chrome-multi-instance-warn](https://github.com/didvc/claude-chrome-multi-instance-warn), Claude Code plugin: warns once per session when a tool payload is about to launch another browser (Chrome/Playwright/Puppeteer/CDP) or fan work…
+- [claude-email-leak-notice](https://github.com/didvc/claude-email-leak-notice), Claude Code plugin: warns once per session when a personal email address appears in a tool payload, so it does not end up in a commit or a pushed…
+- [agent.txtar](https://github.com/didvc/agent.txtar), Portable text block for giving structured context to AI agents, embed anywhere, parse anywhere
 <!-- END gh-mutual-linking -->
