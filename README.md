@@ -124,6 +124,7 @@ The same file can append to `EXTRA_BINDS` (read-write), `EXTRA_RO_BINDS` (read-o
 - The host kernel is shared; a kernel-level exploit could escape the sandbox.
 - Anything explicitly bind-mounted is reachable by the agent, so keep the passthrough list minimal.
 - A device passed with `--dev-bind` is talked to directly, driver and all: the agent can use it as freely as you can. Pass single devices rather than all of `/dev`.
+- Do not pass `/var/run/docker.sock` through. Access to the Docker socket is equivalent to root on the host, so it removes the sandbox rather than extending it. If an agent needs Docker, run a filtering proxy in front of the socket and point `DOCKER_HOST` at the proxy.
 - Agents run with their own default permission behaviour; `ai-bwrap` adds no flags of its own. If you consider the sandbox boundary sufficient and want to skip in-app prompts, pass the agent's own flag, e.g. `ai-bwrap claude -- --dangerously-skip-permissions`.
 
 See [SECURITY.md](SECURITY.md) for the vulnerability reporting process.
