@@ -594,6 +594,26 @@ fi
 
 [[ "$SHARE_NET" == true ]] && BWRAP_ARGS+=(--share-net)
 
+# Sharing the network namespace is not enough to resolve names. /etc is bound
+# read-only, but on systemd-resolved and NetworkManager systems
+# /etc/resolv.conf is a symlink into /run, and the sandbox replaces /run with
+# an empty tmpfs. The symlink then dangles, the agent sees no nameserver at
+# all, and the failure looks like "the sandbox has no network" rather than
+# anything to do with DNS. Bind whatever directory the symlink actually points
+# at, read-only, so the file behind it resolves.
+#
+# Following the link rather than hardcoding a path keeps this working across
+# resolver implementations: systemd-resolved points into /run/systemd/resolve,
+# NetworkManager into /run/NetworkManager, and a plain file in /etc needs
+# nothing extra because /etc is already bound.
+if [[ "$SHARE_NET" == true && -L /etc/resolv.conf ]]; then
+    RESOLV_TARGET="$(readlink -f /etc/resolv.conf 2>/dev/null || true)"
+    if [[ -n "$RESOLV_TARGET" && "$RESOLV_TARGET" != /etc/* ]]; then
+        RESOLV_DIR="${RESOLV_TARGET%/*}"
+        BWRAP_ARGS+=(--ro-bind-try "$RESOLV_DIR" "$RESOLV_DIR")
+    fi
+fi
+
 # Extra args from config and/or the command line.
 for d in ${EXTRA_BINDS[@]+"${EXTRA_BINDS[@]}"}; do
     BWRAP_ARGS+=(--bind-try "$d" "$d")

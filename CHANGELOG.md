@@ -27,6 +27,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `EXTRA_BINDS` / `EXTRA_RO_BINDS` config hooks for shared passthrough mounts.
 - `scripts/screenshots.sh` to regenerate README images with `freeze`.
 
+### Fixed
+
+- Name resolution inside the sandbox on systems where `/etc/resolv.conf` is a
+  symlink into `/run` (systemd-resolved, NetworkManager). `/run` is a private
+  tmpfs in the sandbox, so the symlink dangled and the agent saw no nameserver
+  at all; the symptom looked like the sandbox having no network rather than no
+  DNS. The directory the symlink points at is now bind-mounted read-only
+  whenever networking is shared.
+
 ### Changed
 
 - Git metadata (`.git`) is mounted read-only by default — the agent can edit

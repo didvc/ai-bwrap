@@ -80,6 +80,7 @@ Anything after the agent name that `ai-bwrap` doesn't recognize is passed straig
 | `~/.ssh`, `~/.aws`, secrets, other projects | Not mounted |
 | `$HOME` (other than passed-through dirs) | Empty virtual dir |
 | Physical block devices (`/dev/sda`, …) | Not present |
+| DNS / `/etc/resolv.conf` | Readable; where it symlinks into `/run`, that directory is bound read-only when networking is shared |
 | Host processes (other PIDs) | Isolated PID namespace |
 | `sudo` / privilege escalation | Blocked — no setuid in the namespace |
 
