@@ -180,7 +180,8 @@ Options:
                    needs pasta and nft, see Network below) or none.
   --net-allow ADDR With --net internet: let one private destination through
                    anyway (repeatable). ADDR is IP[/LEN][:PORT], IPv6 with a
-                   port as [IP]:PORT; a port opens both TCP and UDP.
+                   port as [IP]:PORT; a port opens both TCP and UDP. PORT may
+                   be a range, LOW-HIGH (e.g. 1024-65535).
   --no-net         Same as --net none.
   --dry-run        Print the bwrap command that would run, then exit.
   --list           List available agents and exit.
@@ -707,20 +708,32 @@ NET_PREFIX=()
 
 # Turn one NET_ALLOW/NET_BLOCK entry into nft match expressions, one per line:
 # `ip daddr 10.1.2.3`, or with a port `ip daddr 10.1.2.3 tcp dport 3128` and
-# the same for udp. Validated here so that a typo is reported as such rather
-# than as an nft syntax error, and so no entry can smuggle in nft syntax.
+# the same for udp. A port can also be a range, `1024-65535`, which nft takes
+# as is. Validated here so that a typo is reported as such rather than as an
+# nft syntax error, and so no entry can smuggle in nft syntax.
 net_matches() {
-    local entry="$1" addr port="" fam
-    if [[ "$entry" =~ ^([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(/[0-9]+)?)(:([0-9]+))?$ ]]; then
+    local entry="$1" addr port="" fam lo hi
+    local ports='([0-9]{1,5}(-[0-9]{1,5})?)'
+    # IPv6: hex groups with at least two colons ("::" at the very least), and
+    # dots only in a trailing embedded IPv4 address (::ffff:192.0.2.1). This
+    # keeps an IPv4 address with a malformed port from passing as one.
+    local ip6='([0-9A-Fa-f:]*:[0-9A-Fa-f:]*:([0-9A-Fa-f]*|[0-9]+(\.[0-9]+){3})(/[0-9]+)?)'
+    if [[ "$entry" =~ ^([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(/[0-9]+)?)(:$ports)?$ ]]; then
         addr="${BASH_REMATCH[1]}" port="${BASH_REMATCH[4]}" fam=ip
-    elif [[ "$entry" =~ ^\[([0-9A-Fa-f:.]*:[0-9A-Fa-f:.]*(/[0-9]+)?)\]:([0-9]+)$ ]]; then
-        addr="${BASH_REMATCH[1]}" port="${BASH_REMATCH[3]}" fam=ip6
-    elif [[ "$entry" =~ ^\[?([0-9A-Fa-f:.]*:[0-9A-Fa-f:.]*(/[0-9]+)?)\]?$ ]]; then
+    elif [[ "$entry" =~ ^\[$ip6\]:$ports$ ]]; then
+        addr="${BASH_REMATCH[1]}" port="${BASH_REMATCH[5]}" fam=ip6
+    elif [[ "$entry" =~ ^\[?$ip6\]?$ ]]; then
         addr="${BASH_REMATCH[1]}" fam=ip6
     else
-        die "invalid network address: '$entry' (expected IP[/LEN][:PORT], or [IPv6]:PORT)"
+        die "invalid network address: '$entry' (expected IP[/LEN][:PORT[-PORT]], or [IPv6]:PORT[-PORT])"
     fi
     if [[ -n "$port" ]]; then
+        # 10# so that a leading zero is not read as octal.
+        lo=$((10#${port%-*})) hi=$((10#${port#*-}))
+        ((lo >= 1 && hi <= 65535 && lo <= hi)) ||
+            die "invalid port in network address: '$entry' (ports are 1-65535, a range is LOW-HIGH)"
+        port="$lo"
+        ((hi > lo)) && port="$lo-$hi"
         printf '%s daddr %s tcp dport %s\n' "$fam" "$addr" "$port"
         printf '%s daddr %s udp dport %s\n' "$fam" "$addr" "$port"
     else

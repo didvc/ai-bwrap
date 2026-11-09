@@ -69,7 +69,7 @@ Anything after the agent name that `ai-bwrap` doesn't recognize is passed straig
 | `--dev-bind PATH` | Extra bind mount that keeps device access, for a device node or directory such as `/dev/dri` (repeatable). A device passed with `--bind` is visible in the sandbox but cannot be opened. |
 | `--env KEY=VALUE` | Extra environment variable (repeatable). |
 | `--net MODE` | Network access: `host` (default, the host's network as is), `internet` (public internet only, local networks and the host blocked — see [Network](#network)) or `none`. |
-| `--net-allow ADDR` | With `--net internet`: let one private destination through anyway (repeatable). `IP[/LEN][:PORT]`, IPv6 with a port as `[IP]:PORT`. |
+| `--net-allow ADDR` | With `--net internet`: let one private destination through anyway (repeatable). `IP[/LEN][:PORT]`, IPv6 with a port as `[IP]:PORT`; `PORT` may be a range, `LOW-HIGH`. |
 | `--no-net` | Same as `--net none`. |
 | `--dry-run` | Print the `bwrap` command that would run, then exit. |
 | `--list` | List available agents. |
@@ -150,6 +150,7 @@ To make it the default and allow selected internal hosts (a proxy, a package mir
 NET_MODE=internet
 NET_ALLOW+=( 10.0.0.5:3128 '[fd00::5]:443' 10.20.0.0/24 )
 NET_BLOCK+=( 203.0.113.0/24 )       # e.g. a public range that is internal for you
+NET_ALLOW+=( 10.0.0.6:8000-8099 )   # a port range: LOW-HIGH, both ends included
 ```
 
 `--net host` or `--no-net` on the command line override `NET_MODE`. An allowed address is open to anything on the given port (or all ports), so keep `NET_ALLOW` narrow.

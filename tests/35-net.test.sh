@@ -133,3 +133,33 @@ test_invalid_allow_entries_are_rejected() {
         [[ "$status" -ne 0 ]] || fail "'$bad' must be rejected"
     done
 }
+
+test_port_ranges_are_passed_to_nft() {
+    stub_net_tools
+    cat > cfg.sh <<'CFG'
+NET_ALLOW+=(10.0.0.5:1024-65535 '[fd00::5]:8000-8099' 10.0.0.6:080-080 '[::ffff:10.0.0.7]:22' fd00::/8)
+NET_BLOCK+=(203.0.113.10:1-1023)
+CFG
+    AI_BWRAP_CONFIG="$PWD/cfg.sh" dry_run bash --net internet
+    local rules
+    rules="$(nft_rules)"
+    assert_contains "$rules" "ip daddr 10.0.0.5 tcp dport 1024-65535 accept"
+    assert_contains "$rules" "ip daddr 10.0.0.5 udp dport 1024-65535 accept"
+    assert_contains "$rules" "ip6 daddr fd00::5 tcp dport 8000-8099 accept"
+    assert_contains "$rules" "ip daddr 203.0.113.10 tcp dport 1-1023 reject"
+    assert_contains "$rules" "ip6 daddr ::ffff:10.0.0.7 tcp dport 22 accept"
+    assert_contains "$rules" "ip6 daddr fd00::/8 accept"
+    # A one-port range collapses to the port; leading zeros are decimal.
+    assert_contains "$rules" "ip daddr 10.0.0.6 tcp dport 80 accept"
+}
+
+test_invalid_ports_are_rejected() {
+    stub_net_tools
+    local bad
+    for bad in '10.0.0.1:0' '10.0.0.1:65536' '10.0.0.1:99999' '10.0.0.1:2000-1000' \
+        '10.0.0.1:1-' '10.0.0.1:-5' '10.0.0.1:1-2-3' '10.0.0.1:123456' \
+        '10.0.0.1:1:2' '[fd00::1]:0-10'; do
+        run_ai bash --dry-run --net internet --net-allow "$bad"
+        [[ "$status" -ne 0 ]] || fail "'$bad' must be rejected"
+    done
+}
