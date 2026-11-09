@@ -68,7 +68,9 @@ Anything after the agent name that `ai-bwrap` doesn't recognize is passed straig
 | `--ro-bind DIR` | Extra read-only bind mount (repeatable). |
 | `--dev-bind PATH` | Extra bind mount that keeps device access, for a device node or directory such as `/dev/dri` (repeatable). A device passed with `--bind` is visible in the sandbox but cannot be opened. |
 | `--env KEY=VALUE` | Extra environment variable (repeatable). |
-| `--no-net` | Run with networking disabled. |
+| `--net MODE` | Network access: `host` (default, the host's network as is), `internet` (public internet only, local networks and the host blocked — see [Network](#network)) or `none`. |
+| `--net-allow ADDR` | With `--net internet`: let one private destination through anyway (repeatable). `IP[/LEN][:PORT]`, IPv6 with a port as `[IP]:PORT`; `PORT` may be a range, `LOW-HIGH`. |
+| `--no-net` | Same as `--net none`. |
 | `--dry-run` | Print the `bwrap` command that would run, then exit. |
 | `--list` | List available agents. |
 | `-h`, `--help` | Show help. |
@@ -116,6 +118,42 @@ EXTRA_RO_BINDS+=( /sys /opt/rocm )
 ```
 
 The same file can append to `EXTRA_BINDS` (read-write), `EXTRA_RO_BINDS` (read-only), `EXTRA_DEV_BINDS` (devices), and `EXTRA_ENV_VARS` (`KEY=VALUE` pairs). `ai-bwrap --list` shows custom agents alongside the built-ins.
+
+## Network
+
+By default the agent shares your network as is, which includes your LAN, VPN-reachable hosts and services listening on the host. `--net internet` keeps the public internet but cuts off everything local:
+
+```sh
+ai-bwrap claude --net internet
+```
+
+The sandbox gets its own network namespace, connected to the outside through [pasta](https://passt.top) (user-mode networking, no root needed), with an nftables filter installed in it before the agent starts. The agent runs without capabilities in a nested user namespace, so it cannot remove the filter. Blocked:
+
+- private, link-local, CGNAT, multicast and reserved ranges (`NET_BLOCK`), IPv4 and IPv6,
+- every subnet the host is directly attached to — this also covers LANs using public addresses and IPv6 LANs,
+- the host itself, including its `localhost` (pasta runs with no port forwarding in either direction).
+
+DNS keeps working: the sandbox's `resolv.conf` points at a pasta forwarder that relays queries to the host's own resolver, so resolvers on the LAN or `systemd-resolved` work without exceptions. Internal names still resolve; connecting to them fails.
+
+Needs `pasta` and `nft`:
+
+```sh
+sudo apt install passt nftables     # Debian/Ubuntu
+sudo pacman -S passt nftables       # Arch
+sudo dnf install passt nftables     # Fedora
+```
+
+To make it the default and allow selected internal hosts (a proxy, a package mirror), use the config file:
+
+```sh
+# ~/.config/ai-bwrap/config.sh
+NET_MODE=internet
+NET_ALLOW+=( 10.0.0.5:3128 '[fd00::5]:443' 10.20.0.0/24 )
+NET_BLOCK+=( 203.0.113.0/24 )       # e.g. a public range that is internal for you
+NET_ALLOW+=( 10.0.0.6:8000-8099 )   # a port range: LOW-HIGH, both ends included
+```
+
+`--net host` or `--no-net` on the command line override `NET_MODE`. An allowed address is open to anything on the given port (or all ports), so keep `NET_ALLOW` narrow.
 
 ## Security notes
 

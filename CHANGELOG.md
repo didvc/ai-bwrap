@@ -8,6 +8,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `--net internet`: public internet only. The sandbox gets its own network
+  namespace behind pasta (package `passt`) with an nftables filter that blocks
+  private, link-local, CGNAT, multicast and reserved ranges, every subnet the
+  host is attached to, and the host itself. DNS goes through a pasta forwarder
+  to the host's resolver. Exceptions via `--net-allow` / `NET_ALLOW`, extra
+  blocks via `NET_BLOCK`, default mode via `NET_MODE` in the config.
+  `--net host` (default) and `--net none` (= `--no-net`) name the other modes.
+  Entries may name a port or a port range (`IP:LOW-HIGH`).
 - Multi-agent sandbox wrapper with built-in agents: `claude`, `opencode`,
   `grok`, and `bash` (aliases `cc`, `oc`).
 - Extensible agent registry — define `agent_<name>` functions in
